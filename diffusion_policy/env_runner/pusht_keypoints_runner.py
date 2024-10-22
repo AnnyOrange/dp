@@ -156,11 +156,15 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         self.max_steps = max_steps
         self.tqdm_interval_sec = tqdm_interval_sec
     
-    def run(self, policy: BaseLowdimPolicy):
+    def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
         dtype = policy.dtype
 
         env = self.env
+        # temporal_agg = True
+        # # if temporal_agg:
+        #     query_frequency = 1
+        #     num_queries = policy_config["num_queries"]
 
         # plan for rollout
         n_envs = len(self.env_fns)
@@ -170,7 +174,9 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-
+        max_timesteps = 1000
+        
+        
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -195,7 +201,17 @@ class PushTKeypointsRunner(BaseLowdimRunner):
 
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval PushtKeypointsRunner {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
+            # state_dim = 2
+            # num_queries = 8
+            # tasks_num = n_envs
+            # print(tasks_num)
+            # if temporal_agg:
+            #     all_time_actions = torch.zeros(
+            #         [max_timesteps, tasks_num, max_timesteps + num_queries, state_dim]
+            # )
             done = False
+            idx = 0
+            t = 0
             while not done:
                 Do = obs.shape[-1] // 2
                 # create obs dict
@@ -204,6 +220,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                     'obs': obs[...,:self.n_obs_steps,:Do].astype(np.float32),
                     'obs_mask': obs[...,:self.n_obs_steps,Do:] > 0.5
                 }
+                # self.past_action = True
                 if self.past_action and (past_action is not None):
                     # TODO: not tested
                     np_obs_dict['past_action'] = past_action[
@@ -216,20 +233,54 @@ class PushTKeypointsRunner(BaseLowdimRunner):
 
                 # run policy
                 with torch.no_grad():
-                    action_dict = policy.predict_action(obs_dict)
+                    action_dict = policy.fast_predict_action(obs_dict,speed = speed)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
-
+                action = np_action_dict['action'][:,self.n_latency_steps:]
+                # print(np_action_dict['action'].shape)
+                # import pdb;pdb.set_trace()
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
-                action = np_action_dict['action'][:,self.n_latency_steps:]
+                
+                # if temporal_agg:
+                    
+                #     if isinstance(action, np.ndarray):
+                #         action = torch.from_numpy(action).cuda()
+
+                #     # 确保 all_time_actions 也在 GPU 上
+                #     all_time_actions = all_time_actions.cuda()
+                #     all_time_actions[[t], :, t : t + num_queries] = action
+                #     actions_for_curr_step = all_time_actions[:, :,t]
+                #     print(actions_for_curr_step.shape)
+                #     actions_populated = torch.all(
+                #         actions_for_curr_step != 0, axis=2
+                #     )
+                #     print(actions_populated.shape)
+                #     actions_for_curr_step = actions_for_curr_step[actions_populated]
+                #     k = 0.01
+                #     print(len(actions_for_curr_step))
+                #     import pdb;pdb.set_trace()
+                #     exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                #     exp_weights = exp_weights / exp_weights.sum()
+                #     exp_weights = (
+                #         torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
+                #     )
+                #     action = (actions_for_curr_step * exp_weights).sum(
+                #         dim=1, keepdim=True
+                #     )
+                #     action = action.detach().cpu().numpy()
+                #     t+=1
+
 
                 # step env
+                # import pdb;pdb.set_trace()
+                # print(action.shape)
                 obs, reward, done, info = env.step(action)
                 done = np.all(done)
                 past_action = action
+                idx+=1
 
                 # update pbar
                 pbar.update(action.shape[1])
@@ -271,3 +322,16 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             log_data[name] = value
 
         return log_data
+    def set_sampler(self, sampler, nsample=1, nmode=1, noise=0.0, decay=1.0):
+        self.sampler = sampler
+        self.n_samples = nsample
+        self.nmode = nmode
+        self.noise = noise
+        self.decay = decay
+        if noise > 0:
+            self.disruptor = NoiseGenerator(self.
+                noise)
+        print(f'Set sampler: {sampler} {nsample}/{nmode}')
+
+    def set_reference(self, weak):
+        self.weak = weak

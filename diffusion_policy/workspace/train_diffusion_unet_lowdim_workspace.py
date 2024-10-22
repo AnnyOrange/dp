@@ -62,7 +62,8 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
-
+        print(cfg)
+        # import pdb
         # resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
@@ -107,6 +108,7 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
 
         # configure env runner
         env_runner: BaseLowdimRunner
+        # pdb.set_trace()
         env_runner = hydra.utils.instantiate(
             cfg.task.env_runner,
             output_dir=self.output_dir)

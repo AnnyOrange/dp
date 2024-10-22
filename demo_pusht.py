@@ -3,7 +3,7 @@ import click
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.env.pusht.pusht_keypoints_env import PushTKeypointsEnv
 import pygame
-
+import os
 @click.command()
 @click.option('-o', '--output', required=True)
 @click.option('-rs', '--render_size', default=96, type=int)
@@ -22,7 +22,7 @@ def main(output, render_size, control_hz):
     Press "R" to retry.
     Hold "Space" to pause.
     """
-    
+    os.environ["SDL_VIDEODRIVER"] = "dummy"# 这行可注释，因为服务器没有显示的话
     # create replay buffer in read-write mode
     replay_buffer = ReplayBuffer.create_from_path(output, mode='a')
 

@@ -89,7 +89,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
         if n_envs is None:
             n_envs = n_train + n_test
-
+        # import pdb
         # handle latency step
         # to mimic latency, we request n_latency_steps additional steps 
         # of past observations, and the discard the last n_latency_steps
@@ -202,10 +202,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             env_seeds.append(seed)
             env_prefixs.append('test/')
             env_init_fn_dills.append(dill.dumps(init_fn))
-        
+        # pdb.set_trace()
         env = AsyncVectorEnv(env_fns)
         # env = SyncVectorEnv(env_fns)
-
+        # pdb.set_trace()
         self.env_meta = env_meta
         self.env = env
         self.env_fns = env_fns
@@ -225,7 +225,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
 
-    def run(self, policy: BaseLowdimPolicy):
+    def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
         dtype = policy.dtype
         env = self.env
@@ -284,7 +284,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
                 # run policy
                 with torch.no_grad():
-                    action_dict = policy.predict_action(obs_dict)
+                    action_dict = policy.fast_predict_action(obs_dict,speed = speed)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,

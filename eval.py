@@ -22,7 +22,8 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option('-c', '--checkpoint', required=True)
 @click.option('-o', '--output_dir', required=True)
 @click.option('-d', '--device', default='cuda:0')
-def main(checkpoint, output_dir, device):
+@click.option('-s', '--speed', default=1)
+def main(checkpoint, output_dir, device, speed):
     if os.path.exists(output_dir):
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -43,12 +44,16 @@ def main(checkpoint, output_dir, device):
     device = torch.device(device)
     policy.to(device)
     policy.eval()
-    
+    cfg.task.env_runner['n_action_steps'] = int(cfg.task.env_runner['n_action_steps']//speed)
+    policy.n_action_steps = int(policy.n_action_steps//speed)
+    if speed==3:
+        cfg.task.env_runner['n_action_steps'] = 3
+        policy.n_action_steps = 3
     # run eval
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
         output_dir=output_dir)
-    runner_log = env_runner.run(policy)
+    runner_log = env_runner.run(policy,speed = speed)
     
     # dump log to json
     json_log = dict()

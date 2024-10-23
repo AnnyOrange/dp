@@ -134,7 +134,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                             thread_count=1
                         ),
                         file_path=None,
-                        steps_per_render=steps_per_render
+                        steps_per_render=steps_per_render,
+                        pusht=False,
+                        robomimic=True,
+                        abs_action=abs_action,
                     ),
                     n_obs_steps=env_n_obs_steps,
                     n_action_steps=env_n_action_steps,
@@ -284,7 +287,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
                 # run policy
                 with torch.no_grad():
-                    action_dict = policy.fast_predict_action(obs_dict,speed = speed)
+                    action_dict = policy.predict_action(obs_dict)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
@@ -299,10 +302,14 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 
                 # step env
                 env_action = action
+                print("action",action[])
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
+                    print("env_action",env_action.shape)
 
                 obs, reward, done, info = env.step(env_action)
+                print(info)
+                import pdb;pdb.set_trace()
                 done = np.all(done)
                 past_action = action
 
@@ -317,6 +324,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        # print(first_state[0][0])
+        # import pdb;pdb.set_trace()
+        
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
         # fortunately this won't invalidate our conclusion since

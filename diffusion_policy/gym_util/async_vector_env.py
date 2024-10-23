@@ -93,6 +93,7 @@ class AsyncVectorEnv(VectorEnv):
         self.env_fns = env_fns
         self.shared_memory = shared_memory
         self.copy = copy
+        self.statelist = []
 
         # Added dummy_env_fn to fix OpenGL error in Mujoco
         # disable any OpenGL rendering in dummy_env_fn, since it
@@ -153,6 +154,7 @@ class AsyncVectorEnv(VectorEnv):
                         parent_pipe,
                         _obs_buffer,
                         self.error_queue,
+                        self.statelist,
                     ),
                 )
 
@@ -291,6 +293,7 @@ class AsyncVectorEnv(VectorEnv):
         self._raise_if_errors(successes)
         self._state = AsyncState.DEFAULT
         observations_list, rewards, dones, infos = zip(*results)
+        self.statelist,rewards,dones,infos = zip(*results)
 
         if not self.shared_memory:
             self.observations = concatenate(
@@ -612,9 +615,10 @@ def _worker(index, env_fn, pipe, parent_pipe, shared_memory, error_queue):
         env.close()
 
 
-def _worker_shared_memory(index, env_fn, pipe, parent_pipe, shared_memory, error_queue):
+def _worker_shared_memory(index, env_fn, pipe, parent_pipe, shared_memory, error_queue, statelist):
     assert shared_memory is not None
     env = env_fn()
+    statelist.append(env.statelist)
     observation_space = env.observation_space
     parent_pipe.close()
     try:
@@ -633,7 +637,7 @@ def _worker_shared_memory(index, env_fn, pipe, parent_pipe, shared_memory, error
                 write_to_shared_memory(
                     index, observation, shared_memory, observation_space
                 )
-                pipe.send(((None, reward, done, info), True))
+                pipe.send(((statelist, reward, done, info), True))
             elif command == "seed":
                 env.seed(data)
                 pipe.send((None, True))

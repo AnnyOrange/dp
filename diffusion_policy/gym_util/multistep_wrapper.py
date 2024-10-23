@@ -80,7 +80,7 @@ class MultiStepWrapper(gym.Wrapper):
         self.n_action_steps = n_action_steps
         self.reward_agg_method = reward_agg_method
         self.n_obs_steps = n_obs_steps
-
+        self.statelist = env.statelist
         self.obs = deque(maxlen=n_obs_steps+1)
         self.reward = list()
         self.done = list()

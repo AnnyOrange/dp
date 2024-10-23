@@ -17,6 +17,9 @@ from diffusion_policy.policy.base_lowdim_policy import BaseLowdimPolicy
 from diffusion_policy.common.pytorch_util import dict_apply
 from diffusion_policy.env_runner.base_lowdim_runner import BaseLowdimRunner
 
+import os
+import matplotlib.pyplot as plt
+
 class PushTKeypointsRunner(BaseLowdimRunner):
     def __init__(self,
             output_dir,
@@ -71,6 +74,8 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                         thread_count=1
                     ),
                     file_path=None,
+                    pusht=True,
+                    robomimic=False,
                 ),
                 n_obs_steps=env_n_obs_steps,
                 n_action_steps=env_n_action_steps,
@@ -155,6 +160,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         self.past_action = past_action
         self.max_steps = max_steps
         self.tqdm_interval_sec = tqdm_interval_sec
+        self.outputdir = output_dir
     
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
@@ -174,7 +180,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        max_timesteps = 1000
+        # max_timesteps = 1000
         
         
         for chunk_idx in range(n_chunks):
@@ -212,6 +218,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             done = False
             idx = 0
             t = 0
+            target_pos = []
             while not done:
                 Do = obs.shape[-1] // 2
                 # create obs dict
@@ -230,7 +237,8 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
-
+                # print(obs_dict['obs'].shape)
+                # import pdb;pdb.set_trace()
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.fast_predict_action(obs_dict,speed = speed)
@@ -239,45 +247,9 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
                 action = np_action_dict['action'][:,self.n_latency_steps:]
-                # print(np_action_dict['action'].shape)
-                # import pdb;pdb.set_trace()
-                # handle latency_steps, we discard the first n_latency_steps actions
-                # to simulate latency
-                
-                # if temporal_agg:
-                    
-                #     if isinstance(action, np.ndarray):
-                #         action = torch.from_numpy(action).cuda()
-
-                #     # 确保 all_time_actions 也在 GPU 上
-                #     all_time_actions = all_time_actions.cuda()
-                #     all_time_actions[[t], :, t : t + num_queries] = action
-                #     actions_for_curr_step = all_time_actions[:, :,t]
-                #     print(actions_for_curr_step.shape)
-                #     actions_populated = torch.all(
-                #         actions_for_curr_step != 0, axis=2
-                #     )
-                #     print(actions_populated.shape)
-                #     actions_for_curr_step = actions_for_curr_step[actions_populated]
-                #     k = 0.01
-                #     print(len(actions_for_curr_step))
-                #     import pdb;pdb.set_trace()
-                #     exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                #     exp_weights = exp_weights / exp_weights.sum()
-                #     exp_weights = (
-                #         torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1)
-                #     )
-                #     action = (actions_for_curr_step * exp_weights).sum(
-                #         dim=1, keepdim=True
-                #     )
-                #     action = action.detach().cpu().numpy()
-                #     t+=1
-
-
-                # step env
-                # import pdb;pdb.set_trace()
-                # print(action.shape)
                 obs, reward, done, info = env.step(action)
+                # print('info',info)
+                # import pdb;pdb.set_trace()
                 done = np.all(done)
                 past_action = action
                 idx+=1
@@ -290,10 +262,21 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
         # import pdb; pdb.set_trace()
-
+        # print(env.statelist)
+        # first_state = env.statelist[0]
+        # # print(first_state)
+        # print(len(first_state)) # 1
+        # print(len(first_state[0])) # 169
+        # print(first_state[0][0]) # [{'action': array([251.74745, 113.89054], dtype=float32), 'pos_agent': array([230.79548219, 101.99405645])}]
+        # print(len(first_state[0][0])) # 1
+        # print(len(env.statelist)) # 56
+        # import pdb;pdb.set_trace()
         # log
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        # 画图累
+        self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
+        
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
         # fortunately this won't invalidate our conclusion since
@@ -335,3 +318,56 @@ class PushTKeypointsRunner(BaseLowdimRunner):
 
     def set_reference(self, weak):
         self.weak = weak
+    
+
+    def plot_action_vs_pos_agent(self, save_dir, env):
+        # 遍历每个任务
+        for i in range(len(env.statelist)):
+            task_data = env.statelist[i][0]  # 获取每个任务的数据
+
+            # 初始化存储 X 和 Y 方向的 action 和 pos_agent
+            actions_x = []
+            actions_y = []
+            pos_agent_x = []
+            pos_agent_y = []
+
+            # 遍历任务中的每一步
+            for step in task_data:
+                if isinstance(step, list):
+                    step = step[0]
+                action = step['action']
+                pos_agent = step['pos_agent']
+
+                # 提取 action 和 pos_agent 的 x 和 y 值
+                actions_x.append(action[0])
+                actions_y.append(action[1])
+                pos_agent_x.append(pos_agent[0])
+                pos_agent_y.append(pos_agent[1])
+
+            # 创建时间步
+            tstep = np.linspace(0, 1, len(actions_x) - 1)
+            n_groups = 2  # 2 个 group, 一个用于 X 方向，一个用于 Y 方向
+
+            # 创建子图
+            fig, axes = plt.subplots(nrows=n_groups, ncols=1, figsize=(8, 2 * n_groups), sharex=True)
+            save_path = os.path.join(save_dir, 'plot', f'rollout{i+1}_action_vs_pos_agent.png')
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+            # 绘制 X 方向的对比
+            axes[0].plot(tstep, np.array(actions_x)[1:], label=f'action_x')
+            axes[0].plot(tstep, np.array(pos_agent_x)[1:], label=f'pos_agent_x')
+            axes[0].set_title(f'Task {i+1} X axis: Action vs Pos Agent')
+            axes[0].legend()
+
+            # 绘制 Y 方向的对比
+            axes[1].plot(tstep, np.array(actions_y)[1:], label=f'action_y')
+            axes[1].plot(tstep, np.array(pos_agent_y)[1:], label=f'pos_agent_y')
+            axes[1].set_title(f'Task {i+1} Y axis: Action vs Pos Agent')
+            axes[1].legend()
+
+            plt.xlabel('Timestep')
+            plt.tight_layout()
+
+            # 保存图表
+            fig.savefig(save_path)
+            plt.close(fig)

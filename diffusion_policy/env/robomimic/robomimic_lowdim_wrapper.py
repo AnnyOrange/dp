@@ -82,10 +82,15 @@ class RobomimicLowdimWrapper(gym.Env):
         return obs
     
     def step(self, action):
+        # print(self.env)
         raw_obs, reward, done, info = self.env.step(action)
+        # print("raw_obs",raw_obs)
         obs = np.concatenate([
             raw_obs[key] for key in self.obs_keys
         ], axis=0)
+        # print("obs",obs)
+        # 这个info实际上应该是空的
+        info = raw_obs 
         return obs, reward, done, info
     
     def render(self, mode='rgb_array'):

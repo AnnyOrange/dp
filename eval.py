@@ -52,7 +52,8 @@ def main(checkpoint, output_dir, device, speed):
     # run eval
     env_runner = hydra.utils.instantiate(
         cfg.task.env_runner,
-        output_dir=output_dir)
+        output_dir=output_dir,
+        speed = speed)
     runner_log = env_runner.run(policy,speed = speed)
     
     # dump log to json

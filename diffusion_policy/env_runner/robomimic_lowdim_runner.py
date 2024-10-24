@@ -23,7 +23,8 @@ import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
 
-
+import os
+import matplotlib.pyplot as plt
 def create_env(env_meta, obs_keys):
     ObsUtils.initialize_obs_modality_mapping_from_dict(
         {'low_dim': obs_keys})
@@ -65,7 +66,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             past_action=False,
             abs_action=False,
             tqdm_interval_sec=5.0,
-            n_envs=None
+            n_envs=None,
+            speed=1
         ):
         """
         Assuming:
@@ -227,6 +229,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.rotation_transformer = rotation_transformer
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
+        self.outputdir = output_dir
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
@@ -297,19 +300,16 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # to simulate latency
                 action = np_action_dict['action'][:,self.n_latency_steps:]
                 if not np.all(np.isfinite(action)):
-                    print(action)
+                    # print(action)
                     raise RuntimeError("Nan or Inf action")
                 
                 # step env
                 env_action = action
-                print("action",action[])
+                # print("action",action[0,0,:])
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
-                    print("env_action",env_action.shape)
 
                 obs, reward, done, info = env.step(env_action)
-                print(info)
-                import pdb;pdb.set_trace()
                 done = np.all(done)
                 past_action = action
 
@@ -322,8 +322,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
 
         # log
+        # print(len(env.statelist)) # 28
+        # print(len(env.statelist[0])) # 1
+        # print(len(env.statelist[0][0])) # 800
+        # print(len(env.statelist[0][0][0]))
+        # print(env.statelist[0][0][0])
+        # import pdb;pdb.set_trace()
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
         # print(first_state[0][0])
         # import pdb;pdb.set_trace()
         
@@ -363,10 +370,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             action = action.reshape(-1,2,10)
 
         d_rot = action.shape[-1] - 4
+        # print(d_rot)
         pos = action[...,:3]
+        # print(pos[0,0,:])
         rot = action[...,3:3+d_rot]
+        # print(rot[0][0][:])
         gripper = action[...,[-1]]
+        # print(gripper[0,0,:])
         rot = self.rotation_transformer.inverse(rot)
+        # print(rot[0,0,:])
         uaction = np.concatenate([
             pos, rot, gripper
         ], axis=-1)
@@ -376,3 +388,47 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             uaction = uaction.reshape(*raw_shape[:-1], 14)
 
         return uaction
+    def plot_action_vs_pos_agent(self, save_dir, env):
+        # 遍历每个任务
+        for i in range(len(env.statelist)):
+            task_data = env.statelist[i][0]  # 获取每个任务的数据
+
+            # 初始化存储 7 维度的 action 和 pos_agent
+            actions = [[] for _ in range(7)]
+            pos_agent = [[] for _ in range(7)]
+
+            # 遍历任务中的每一步
+            for step in task_data:
+                if isinstance(step, list):
+                    step = step[0]
+                action = step['action']
+                pos = step['pos_agent']
+
+                # 将每个维度的 action 和 pos_agent 存入对应列表
+                for j in range(7):
+                    actions[j].append(action[j])
+                    pos_agent[j].append(pos[j])
+
+            # 创建时间步
+            tstep = np.linspace(0, 1, len(actions[0]) - 1)
+            n_groups = 7  # 7 个 group, 用于每个维度
+
+            # 创建子图
+            fig, axes = plt.subplots(nrows=n_groups, ncols=1, figsize=(8, 2 * n_groups), sharex=True)
+            save_path = os.path.join(save_dir, 'plot', f'rollout{i+1}_action_vs_pos_agent.png')
+            os.makedirs(os.path.dirname(save_path), exist_ok=True)
+
+            # 绘制每个维度的对比
+            for j in range(7):
+                axes[j].plot(tstep, np.array(actions[j])[1:], label=f'action_dim_{j}')
+                axes[j].plot(tstep, np.array(pos_agent[j])[1:], label=f'pos_agent_dim_{j}')
+                axes[j].set_title(f'Task {i+1} Dimension {j}: Action vs Pos Agent')
+                axes[j].legend()
+
+            plt.xlabel('Timestep')
+            plt.tight_layout()
+
+            # 保存图表
+            fig.savefig(save_path)
+            plt.close(fig)
+

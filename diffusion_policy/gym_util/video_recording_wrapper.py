@@ -58,22 +58,26 @@ class VideoRecordingWrapper(gym.Wrapper):
             # print(result[-1]['robot0_eef_pos'])
             robot0_eef_pos = result[-1]['robot0_eef_pos']
             robot0_eef_quat = result[-1]['robot0_eef_quat']
-            print("robot0_eef_quat",len(robot0_eef_quat))
+            # print("robot0_eef_quat",len(robot0_eef_quat))
             robot0_gripper_qpos = result[-1]['robot0_gripper_qpos']
-            print("robot0_gripper_qpos",len(robot0_gripper_qpos))
+            # print("robot0_gripper_qpos",robot0_gripper_qpos)
             agent = np.concatenate([robot0_eef_pos,robot0_eef_quat,robot0_gripper_qpos])
             # print(agent)
             if self.abs_action:
-                rotation_transformer = RotationTransformer('quaternion', 'rotation_6d')
-                agent = self.undo_transform_action(agent,rotation_transformer)
-                print(agent)
-                print(agent.shape)
+                rotation_transformer = RotationTransformer('quaternion','axis_angle')
+                agent = self.undo_transform_agent(agent,rotation_transformer)
+                # print(agent)
+                # print(agent.shape)
             state_data = [{
                 "action": action,
-                "agent": agent
+                "pos_agent": agent
             }]
+            self.statelist.append(state_data)
+            # print(state_data)
+        # print(result)
+        result = list(result)
         result[-1] = {}
-        print(result)
+        result = tuple(result)
         self.step_count += 1
         if self.file_path is not None \
             and ((self.step_count % self.steps_per_render) == 0):
@@ -90,25 +94,26 @@ class VideoRecordingWrapper(gym.Wrapper):
         if self.video_recoder.is_ready():
             self.video_recoder.stop()
         return self.file_path
-    def undo_transform_action(self, agent,rotation_transformer):
+    def undo_transform_agent(self, agent,rotation_transformer):
         raw_shape = agent.shape
-        print(raw_shape)
-        if raw_shape[-1] == 20:
-            # dual arm
-            action = agent.reshape(2,10)
+        # print(raw_shape)
+        # if raw_shape[-1] == 20:
+        #     # dual arm
+        #     action = agent.reshape(2,10)
 
         d_rot = agent.shape[-1] - 5
         pos = agent[...,:3]
         rot = agent[...,3:3+d_rot]
         gripper = agent[...,[-1]]
-        rot = rotation_transformer.inverse(rot)
+        # print(gripper)
+        rot = rotation_transformer.forward(rot)
         uagent = np.concatenate([
             pos, rot, gripper
         ], axis=-1)
 
-        if raw_shape[-1] == 20:
-            # dual arm
-            uagent = uagent.reshape(*raw_shape[:-1], 14)
+        # if raw_shape[-1] == 20:
+        #     # dual arm
+        #     uagent = uagent.reshape(*raw_shape[:-1], 14)
 
         return uagent
 

@@ -40,13 +40,14 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             agent_keypoints=False,
             past_action=False,
             tqdm_interval_sec=5.0,
-            n_envs=None
+            n_envs=None,
+            speed=1,
         ):
         super().__init__(output_dir)
 
         if n_envs is None:
             n_envs = n_train + n_test
-
+        max_steps = max_steps//speed
         # handle latency step
         # to mimic latency, we request n_latency_steps additional steps 
         # of past observations, and the discard the last n_latency_steps

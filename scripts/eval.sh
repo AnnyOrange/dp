@@ -9,7 +9,7 @@ OUTPUTDIR='data/can_eval/'  # 对应的 output_dir
 # 遍历 SPEEDS，每个任务都用4个speed
 for SPEED in "${SPEEDS[@]}"; do
   # 为每个 speed 创建对应的 output_dir
-  SPEED_OUTPUTDIR="${OUTPUTDIR}/speed_${SPEED}"
+  SPEED_OUTPUTDIR="${OUTPUTDIR}/sp_plot${SPEED}"
 
   # 启动任务，并行执行
   python eval.py --checkpoint ${CHECKPOINT} --output_dir ${SPEED_OUTPUTDIR} --device cuda:${DEVICE} --speed ${SPEED} &

@@ -156,6 +156,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         self.crf = crf
         self.agent_keypoints = agent_keypoints
         self.n_obs_steps = n_obs_steps
+        print(n_obs_steps)
         self.n_action_steps = n_action_steps
         self.n_latency_steps = n_latency_steps
         self.past_action = past_action

@@ -311,10 +311,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
                 obs, reward, done, info = env.step(env_action)
                 # print(done.shape)
-                print(reward)
+                # print(reward)
                 steps += (reward == 0)
                 # # steps += ~done
-                print(steps)
+                # print(steps)
                 # print(done)
                 # 这个done的shape是(28,)预示着28个任务是否成功。其中如果done[i] == False 那么 对应step[i]+=1 直到done[i]==True
                 done = np.all(done)

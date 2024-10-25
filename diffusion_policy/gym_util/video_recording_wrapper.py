@@ -64,7 +64,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             agent = np.concatenate([robot0_eef_pos,robot0_eef_quat,robot0_gripper_qpos])
             # print(agent)
             if self.abs_action:
-                rotation_transformer = RotationTransformer('quaternion','axis_angle')
+                rotation_transformer = RotationTransformer('axis_angle','quaternion')
                 agent = self.undo_transform_agent(agent,rotation_transformer)
                 # print(agent)
                 # print(agent.shape)
@@ -106,7 +106,7 @@ class VideoRecordingWrapper(gym.Wrapper):
         rot = agent[...,3:3+d_rot]
         gripper = agent[...,[-1]]
         # print(gripper)
-        rot = rotation_transformer.forward(rot)
+        rot = rotation_transformer.inverse(rot)
         uagent = np.concatenate([
             pos, rot, gripper
         ], axis=-1)

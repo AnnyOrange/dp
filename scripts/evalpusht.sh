@@ -9,7 +9,7 @@ OUTPUTDIR='data/pusht_eval/'                      # 单个 output_dir
 # 遍历 SPEEDS，执行任务
 for SPEED in "${SPEEDS[@]}"; do
   # 为每个 speed 创建对应的 output_dir
-  SPEED_OUTPUTDIR="${OUTPUTDIR}/max_step_sp${SPEED}"
+  SPEED_OUTPUTDIR="${OUTPUTDIR}/step_sp${SPEED}"
   
   # 启动任务，并行执行
   python eval.py --checkpoint ${CHECKPOINT} --output_dir ${SPEED_OUTPUTDIR} --device cuda:${DEVICE} --speed ${SPEED} &

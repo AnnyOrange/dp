@@ -217,9 +217,6 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             #         [max_timesteps, tasks_num, max_timesteps + num_queries, state_dim]
             # )
             done = False
-            idx = 0
-            t = 0
-            target_pos = []
             while not done:
                 Do = obs.shape[-1] // 2
                 # create obs dict

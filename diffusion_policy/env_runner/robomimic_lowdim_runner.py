@@ -270,7 +270,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Lowdim {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-
+            steps = np.zeros(28)
             done = False
             while not done:
                 # create obs dict
@@ -290,7 +290,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
                 # run policy
                 with torch.no_grad():
-                    action_dict = policy.predict_action(obs_dict)
+                    action_dict = policy.fast_predict_action(obs_dict,speed = speed)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
@@ -310,12 +310,24 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     env_action = self.undo_transform_action(action)
 
                 obs, reward, done, info = env.step(env_action)
+                # print(done.shape)
+                print(reward)
+                steps += (reward == 0)
+                # # steps += ~done
+                print(steps)
+                # print(done)
+                # 这个done的shape是(28,)预示着28个任务是否成功。其中如果done[i] == False 那么 对应step[i]+=1 直到done[i]==True
                 done = np.all(done)
                 past_action = action
 
                 # update pbar
                 pbar.update(action.shape[1])
             pbar.close()
+            step_file_path = os.path.join(self.outputdir, 'step.txt')
+            with open(step_file_path, 'a') as f:
+                f.write("Steps:\n")
+                f.write(", ".join([str(step) for step in steps]))  # Writing the steps as a comma-separated list
+                f.write("\n")
 
             # collect data for this round
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
@@ -342,6 +354,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # to completely reproduce reported numbers, uncomment this line:
         # for i in range(len(self.env_fns)):
         # and comment out this line
+        
         for i in range(n_inits):
             seed = self.env_seeds[i]
             prefix = self.env_prefixs[i]

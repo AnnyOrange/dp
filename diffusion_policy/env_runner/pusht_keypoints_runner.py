@@ -42,6 +42,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             tqdm_interval_sec=5.0,
             n_envs=None,
             speed=1,
+            closeloop=False
         ):
         super().__init__(output_dir)
 
@@ -156,23 +157,24 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         self.crf = crf
         self.agent_keypoints = agent_keypoints
         self.n_obs_steps = n_obs_steps
-        print(n_obs_steps)
+        # print(n_obs_steps)
         self.n_action_steps = n_action_steps
         self.n_latency_steps = n_latency_steps
         self.past_action = past_action
         self.max_steps = max_steps
         self.tqdm_interval_sec = tqdm_interval_sec
         self.outputdir = output_dir
+        self.temporal_agg = closeloop
     
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
         dtype = policy.dtype
 
         env = self.env
-        # temporal_agg = True
-        # # if temporal_agg:
-        #     query_frequency = 1
-        #     num_queries = policy_config["num_queries"]
+        
+        # if temporal_agg:
+            # query_frequency = 1
+            # num_queries = policy_config["num_queries"]
 
         # plan for rollout
         n_envs = len(self.env_fns)
@@ -209,15 +211,16 @@ class PushTKeypointsRunner(BaseLowdimRunner):
 
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval PushtKeypointsRunner {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            # state_dim = 2
+            state_dim = 2
             # num_queries = 8
-            # tasks_num = n_envs
+            tasks_num = n_envs
             # print(tasks_num)
-            # if temporal_agg:
-            #     all_time_actions = torch.zeros(
-            #         [max_timesteps, tasks_num, max_timesteps + num_queries, state_dim]
-            # )
+            if self.temporal_agg:
+                all_time_actions = torch.zeros(
+                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, state_dim]
+            )
             done = False
+            t = 0
             while not done:
                 Do = obs.shape[-1] // 2
                 # create obs dict
@@ -241,17 +244,55 @@ class PushTKeypointsRunner(BaseLowdimRunner):
                 # run policy
                 with torch.no_grad():
                     action_dict = policy.fast_predict_action(obs_dict,speed = speed)
-
+                
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
                 action = np_action_dict['action'][:,self.n_latency_steps:]
+                
+                if self.temporal_agg:
+                    all_actions = torch.from_numpy(action).float()
+                    # all_actions扩维度 最开始增加维度
+                    all_actions = all_actions.unsqueeze(0)
+                    all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
+                    # print(all_time_actions.shape)
+                    actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
+                    actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
+                    # print(actions_populated.shape)
+                    # 使用 boolean indexing 保留 populated actions
+                    tasks_actions_for_curr_step = []
+                    for task_idx in range(all_actions.shape[1]):  # 遍历任务
+                        populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
+                        # print(populated_actions.shape)
+                        tasks_actions_for_curr_step.append(populated_actions)
+                    # import pdb;pdb.set_trace()
+                    # print(len(tasks_actions_for_curr_step))
+                    k = 0.01
+                    weighted_actions = []
+                    for task_actions in tasks_actions_for_curr_step:
+                        exp_weights = np.exp(-k * np.arange(len(task_actions)))
+                        # print(exp_weights.shape)
+                        # print(exp_weights)
+                        exp_weights = exp_weights / exp_weights.sum()
+                        exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
+                        # 计算加权动作
+                        raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
+                        weighted_actions.append(raw_action)
+                    # import pdb;pdb.set_trace()
+                    # print(len(weighted_actions))
+                    # 最终的 weighted_actions 是包含 56 个 [1, 14] 的列表
+                    weighted_actions = torch.stack(weighted_actions)  # 将所有任务的加权动作堆叠成 tensor
+                    action = weighted_actions.detach().cpu().numpy()
+                    # print(action.shape)
+                    # import pdb;pdb.set_trace()
+                    t+=1
+                    # print(action.shape)
                 obs, reward, done, info = env.step(action)
                 # print('info',info)
                 # import pdb;pdb.set_trace()
                 done = np.all(done)
                 past_action = action
-                idx+=1
+                # idx+=1
 
                 # update pbar
                 pbar.update(action.shape[1])
@@ -260,6 +301,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
             # collect data for this round
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
+            # print("yeah")
         # import pdb; pdb.set_trace()
         # print(env.statelist)
         # first_state = env.statelist[0]
@@ -323,7 +365,7 @@ class PushTKeypointsRunner(BaseLowdimRunner):
         # 遍历每个任务
         for i in range(len(env.statelist)):
             task_data = env.statelist[i][0]  # 获取每个任务的数据
-
+            print(len(task_data))
             # 初始化存储 X 和 Y 方向的 action 和 pos_agent
             actions_x = []
             actions_y = []

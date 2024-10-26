@@ -67,7 +67,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             abs_action=False,
             tqdm_interval_sec=5.0,
             n_envs=None,
-            speed=1
+            speed=1,
+            closeloop=False,
+            te=False
         ):
         """
         Assuming:
@@ -230,6 +232,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.abs_action = abs_action
         self.tqdm_interval_sec = tqdm_interval_sec
         self.outputdir = output_dir
+        self.temporal_agg = te
+        self.closeloop = closeloop
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
@@ -272,6 +276,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 leave=False, mininterval=self.tqdm_interval_sec)
             steps = np.zeros(28)
             done = False
+            t = 0
+            state_dim = 7
+            # num_queries = 8
+            tasks_num = n_envs
+            # print(tasks_num)
+            if self.temporal_agg:
+                all_time_actions = torch.zeros(
+                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, state_dim]
+            )
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -289,8 +302,12 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                         device=device))
 
                 # run policy
-                with torch.no_grad():
-                    action_dict = policy.fast_predict_action(obs_dict,speed = speed)
+                if self.closeloop is True and self.temporal_agg is False:
+                    with torch.no_grad():
+                        action_dict = policy.predict_action(obs_dict)
+                else:        
+                    with torch.no_grad():
+                        action_dict = policy.fast_predict_action(obs_dict,speed = speed)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
@@ -308,7 +325,47 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # print("action",action[0,0,:])
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
-
+                    
+                if self.closeloop is True and self.temporal_agg is False:
+                    env_action = env_action[:, -1:, :]
+                    
+                if self.temporal_agg:
+                    all_actions = torch.from_numpy(env_action).float()
+                    # all_actions扩维度 最开始增加维度
+                    all_actions = all_actions.unsqueeze(0)
+                    all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
+                    # print(all_time_actions.shape)
+                    actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
+                    actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
+                    # print(actions_populated.shape)
+                    # 使用 boolean indexing 保留 populated actions
+                    tasks_actions_for_curr_step = []
+                    for task_idx in range(all_actions.shape[1]):  # 遍历任务
+                        populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
+                        # print(populated_actions.shape)
+                        tasks_actions_for_curr_step.append(populated_actions)
+                    # import pdb;pdb.set_trace()
+                    # print(len(tasks_actions_for_curr_step))
+                    k = 0.01
+                    weighted_actions = []
+                    for task_actions in tasks_actions_for_curr_step:
+                        exp_weights = np.exp(-k * np.arange(len(task_actions)))
+                        # print(exp_weights.shape)
+                        # print(exp_weights)
+                        exp_weights = exp_weights / exp_weights.sum()
+                        exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
+                        # 计算加权动作
+                        raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
+                        weighted_actions.append(raw_action)
+                    # import pdb;pdb.set_trace()
+                    # print(len(weighted_actions))
+                    # 最终的 weighted_actions 是包含 56 个 [1, 14] 的列表
+                    weighted_actions = torch.stack(weighted_actions)  # 将所有任务的加权动作堆叠成 tensor
+                    env_action = weighted_actions.detach().cpu().numpy()
+                    # print(action.shape)
+                    # import pdb;pdb.set_trace()
+                    t+=1
+                    
                 obs, reward, done, info = env.step(env_action)
                 # print(done.shape)
                 # print(reward)

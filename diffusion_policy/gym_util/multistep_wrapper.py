@@ -110,6 +110,8 @@ class MultiStepWrapper(gym.Wrapper):
                 break
             # print(self.reward)
             if len(self.reward) > 0 and (self.reward[-1]==1):
+                done = True
+                self.done.append(done)
                 break
             observation, reward, done, info = super().step(act)
             # print(reward)

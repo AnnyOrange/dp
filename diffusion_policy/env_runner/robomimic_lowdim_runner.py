@@ -234,6 +234,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.outputdir = output_dir
         self.temporal_agg = te
         self.closeloop = closeloop
+        print("self.temporal_agg",self.temporal_agg)
+        print("self.closeloop",self.closeloop)
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device

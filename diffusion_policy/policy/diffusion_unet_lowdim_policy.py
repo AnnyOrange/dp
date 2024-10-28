@@ -260,7 +260,7 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
             result['obs_pred'] = obs_pred
         return result
     
-    def get_samples(self, obs_dict: Dict[str, torch.Tensor], num_samples:int) -> Dict[str, torch.Tensor]:
+    def get_samples(self, obs_dict: Dict[str, torch.Tensor], num_samples:int,speed:int) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -318,7 +318,7 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
         # unnormalize prediction
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
-
+        action_pred = action_pred[:,::speed,:]
         # get action
         if self.pred_action_steps_only:
             action = action_pred
@@ -328,6 +328,7 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
                 start = To - 1
             end = start + self.n_action_steps
             action = action_pred[:,start:end]
+        # print(self.n_action_steps)
         
         result = {
             'action': action,

@@ -7,6 +7,7 @@ data_local
 .vscode
 _wandb
 calculate.py
+calculate_closeloop.py
 **/.DS_Store
 
 fuse.cfg

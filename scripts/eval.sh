@@ -3,10 +3,10 @@
 # 定义参数
 CHECKPOINT='data/checkpoints/can_ph_1.ckpt'  # 单个 checkpoint
 DEVICE=3  # 对应的 GPU 设备
-SPEEDS=(1 2 3 4)  # 要使用的 speed 参数
+SPEEDS=(8)  # 要使用的 speed 参数
 OUTPUTDIR='data/can_eval/'  # 对应的 output_dir
 CLOSELOOP=True
-TE=False
+TE=True
 # 遍历 SPEEDS，每个任务都用4个speed
 for SPEED in "${SPEEDS[@]}"; do
   # 为每个 speed 创建对应的 output_dir

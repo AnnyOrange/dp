@@ -148,7 +148,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     n_action_steps=env_n_action_steps,
                     max_episode_steps=max_steps
                 )
-        n_envs = 2
         env_fns = [env_fn] * n_envs
         env_seeds = list()
         env_prefixs = list()
@@ -223,7 +222,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.fps = fps
         self.crf = crf
         self.n_obs_steps = n_obs_steps
-        self.n_action_steps = 16 #n_action_steps
+        self.n_action_steps = n_action_steps #n_action_steps
         self.n_latency_steps = n_latency_steps
         self.env_n_obs_steps = env_n_obs_steps
         self.env_n_action_steps = env_n_action_steps
@@ -251,7 +250,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-
+        max = 0
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -323,7 +322,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
     
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
-                action = np_action_dict['action_pred'][:,self.n_latency_steps:]
+                action = np_action_dict['action'][:,self.n_latency_steps:]
                 if not np.all(np.isfinite(action)):
                     # print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -338,14 +337,16 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 np_sample_dict = dict_apply(sample_dict,
                     lambda x: x.detach().to('cpu').numpy())
 
-                sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
+                sample = np_sample_dict['action'][:,self.n_latency_steps:]
                 if self.abs_action:
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
                 if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float()
+                    all_actions = torch.from_numpy(env_action).float() #(28, 8, 7)
+                    print(env_action.shape)
                     all_samples = torch.from_numpy(sample).float()
+                    print(all_samples.shape)
                     all_samples = all_samples.permute(1,2,0,3)
                     # all_actions扩维度 最开始增加维度
                     all_actions = all_actions.unsqueeze(0)
@@ -363,26 +364,57 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
                         populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
                         tasks_samples_for_curr_step.append(populated_samples)
+                    # entropy = []
+                    # for task_samples in tasks_samples_for_curr_step:
+                    #     entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                    #     entropy.append(entro)
+                    # 直接使用布尔掩码从 actions_for_curr_step 和 samples_for_curr_step 中获取有效动作和样本
+                    # populated_actions = actions_for_curr_step[actions_populated].view(actions_for_curr_step.size(0), -1, actions_for_curr_step.size(-1))
+                    # populated_samples = samples_for_curr_step[actions_populated].view(samples_for_curr_step.size(0), -1, samples_for_curr_step.size(-2), samples_for_curr_step.size(-1))
+
+                    # # tasks_actions_for_curr_step 和 tasks_samples_for_curr_step 是包含所有任务有效数据的张量
+                    # tasks_actions_for_curr_step = populated_actions
+                    # tasks_samples_for_curr_step = populated_samples
+
                     entropy = []
                     for task_samples in tasks_samples_for_curr_step:
                         entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
                         entropy.append(entro)
-                    entropy = torch.stack(entropy)
-                    entropy = entropy.detach().cpu().numpy()
+
+                    # k = 0.01
+                    # weighted_actions = []
+                    # for task_actions in tasks_actions_for_curr_step:
+                    #     exp_weights = np.exp(-k * np.arange(len(task_actions)))
+                    #     exp_weights = exp_weights / exp_weights.sum()
+                    #     exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
+
+                    #     raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
+                    #     weighted_actions.append(raw_action)
+                  
+                    # weighted_actions = torch.stack(weighted_actions)  
+                    # env_action = weighted_actions.detach().cpu().numpy()
+                    # 确保 tasks_actions_for_curr_step 是张量
+                    tasks_actions_for_curr_step = torch.stack(tasks_actions_for_curr_step) if isinstance(tasks_actions_for_curr_step, list) else tasks_actions_for_curr_step
 
                     k = 0.01
-                    weighted_actions = []
-                    for task_actions in tasks_actions_for_curr_step:
-                        exp_weights = np.exp(-k * np.arange(len(task_actions)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
+                    # 获取任务数量和动作序列长度
+                    num_tasks, num_actions = tasks_actions_for_curr_step.shape[:2]
 
-                        raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
-                        weighted_actions.append(raw_action)
-                  
-                    weighted_actions = torch.stack(weighted_actions)  
+                    # 计算所有动作的指数加权系数，并扩展维度以便与 tasks_actions_for_curr_step 对齐
+                    exp_weights = torch.from_numpy(np.exp(-k * np.arange(num_actions))).unsqueeze(0)  # [1, num_actions]
+                    exp_weights = exp_weights / exp_weights.sum()  # 归一化权重
+                    exp_weights = exp_weights.to(tasks_actions_for_curr_step.device)  # 确保在同一设备上
+
+                    # 广播乘法以对每个任务的所有动作应用权重，然后对动作维度求和
+                    weighted_actions = (tasks_actions_for_curr_step * exp_weights).sum(dim=1, keepdim=True)  # [batch, num_tasks, features]
+
+                    # weighted_actions = torch.stack(weighted_actions)  
                     env_action = weighted_actions.detach().cpu().numpy()
+                    print(env_action.shape)
+                    import pdb;pdb.set_trace()
                     t+=1
+
+
                 
                 env_action = np.concatenate((env_action, entropy),axis=-1)
                 obs, reward, done, info = env.step(env_action)

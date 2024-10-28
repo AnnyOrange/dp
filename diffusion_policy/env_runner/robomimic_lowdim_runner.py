@@ -59,9 +59,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             n_obs_steps=2,
             n_action_steps=8,
             n_latency_steps=0,
-            render_hw=(256,256),
+            render_hw=(512,512),
             render_camera_name='agentview',
-            fps=10,
+            fps=20,
             crf=22,
             past_action=False,
             abs_action=False,
@@ -90,7 +90,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         """
 
         super().__init__(output_dir)
-
+        render_hw=(512,512)
+        fps = 20
         if n_envs is None:
             n_envs = n_train + n_test
         # import pdb
@@ -147,7 +148,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     n_action_steps=env_n_action_steps,
                     max_episode_steps=max_steps
                 )
-
+        n_envs = 2
         env_fns = [env_fn] * n_envs
         env_seeds = list()
         env_prefixs = list()
@@ -222,7 +223,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.fps = fps
         self.crf = crf
         self.n_obs_steps = n_obs_steps
-        self.n_action_steps = n_action_steps
+        self.n_action_steps = 16 #n_action_steps
         self.n_latency_steps = n_latency_steps
         self.env_n_obs_steps = env_n_obs_steps
         self.env_n_action_steps = env_n_action_steps
@@ -276,17 +277,21 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Lowdim {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            steps = np.zeros(28)
+            steps = np.zeros(n_envs)
             done = False
             t = 0
             state_dim = 7
-            # num_queries = 8
             tasks_num = n_envs
+            num_samples = 10
             # print(tasks_num)
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
                     [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, state_dim]
-            )
+            )   
+                all_time_samples = torch.zeros(
+                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, num_samples,state_dim-1]
+            )   
+
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -310,14 +315,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 else:        
                     with torch.no_grad():
                         action_dict = policy.fast_predict_action(obs_dict,speed = speed)
+                        sample_dict = policy.get_samples(obs_dict, num_samples=num_samples)
 
                 # device_transfer
                 np_action_dict = dict_apply(action_dict,
                     lambda x: x.detach().to('cpu').numpy())
-
+    
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
-                action = np_action_dict['action'][:,self.n_latency_steps:]
+                action = np_action_dict['action_pred'][:,self.n_latency_steps:]
                 if not np.all(np.isfinite(action)):
                     # print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -327,60 +333,65 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # print("action",action[0,0,:])
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
-                    
-                if self.closeloop is True and self.temporal_agg is False:
-                    env_action = env_action[:, -1:, :]
-                    
+                
+                # process samples:
+                np_sample_dict = dict_apply(sample_dict,
+                    lambda x: x.detach().to('cpu').numpy())
+
+                sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
+                if self.abs_action:
+                    sample = self.undo_transform_action(sample)
+                sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
+                # perform temporal ensemble    
                 if self.temporal_agg:
                     all_actions = torch.from_numpy(env_action).float()
+                    all_samples = torch.from_numpy(sample).float()
+                    all_samples = all_samples.permute(1,2,0,3)
                     # all_actions扩维度 最开始增加维度
                     all_actions = all_actions.unsqueeze(0)
                     all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
-                    # print(all_time_actions.shape)
                     actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
                     actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
-                    # print(actions_populated.shape)
-                    # 使用 boolean indexing 保留 populated actions
+                    all_time_samples[[t], :, t : t + self.n_action_steps] = all_samples[:,:,:,:6]  # [400, 56, 450, 10,14]
+                    samples_for_curr_step = all_time_samples[:, :, t]  # [400, 56, 10,14]
+                    
                     tasks_actions_for_curr_step = []
+                    tasks_samples_for_curr_step = []
                     for task_idx in range(all_actions.shape[1]):  # 遍历任务
                         populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                        # print(populated_actions.shape)
                         tasks_actions_for_curr_step.append(populated_actions)
-                    # import pdb;pdb.set_trace()
-                    # print(len(tasks_actions_for_curr_step))
+
+                        populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
+                        tasks_samples_for_curr_step.append(populated_samples)
+                    entropy = []
+                    for task_samples in tasks_samples_for_curr_step:
+                        entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                        entropy.append(entro)
+                    entropy = torch.stack(entropy)
+                    entropy = entropy.detach().cpu().numpy()
+
                     k = 0.01
                     weighted_actions = []
                     for task_actions in tasks_actions_for_curr_step:
                         exp_weights = np.exp(-k * np.arange(len(task_actions)))
-                        # print(exp_weights.shape)
-                        # print(exp_weights)
                         exp_weights = exp_weights / exp_weights.sum()
                         exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
-                        # 计算加权动作
+
                         raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
                         weighted_actions.append(raw_action)
-                    # import pdb;pdb.set_trace()
-                    # print(len(weighted_actions))
-                    # 最终的 weighted_actions 是包含 56 个 [1, 14] 的列表
-                    weighted_actions = torch.stack(weighted_actions)  # 将所有任务的加权动作堆叠成 tensor
+                  
+                    weighted_actions = torch.stack(weighted_actions)  
                     env_action = weighted_actions.detach().cpu().numpy()
-                    # print(action.shape)
-                    # import pdb;pdb.set_trace()
                     t+=1
-                    
+                
+                env_action = np.concatenate((env_action, entropy),axis=-1)
                 obs, reward, done, info = env.step(env_action)
-                # print(done.shape)
-                # print(reward)
                 steps += (reward == 0)
-                # # steps += ~done
-                # print(steps)
-                # print(done)
-                # 这个done的shape是(28,)预示着28个任务是否成功。其中如果done[i] == False 那么 对应step[i]+=1 直到done[i]==True
                 done = np.all(done)
                 past_action = action
 
                 # update pbar
-                pbar.update(action.shape[1])
+                pbar.update(env_action.shape[1])
             pbar.close()
             step_file_path = os.path.join(self.outputdir, 'step.txt')
             with open(step_file_path, 'a') as f:
@@ -392,18 +403,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
             all_rewards[this_global_slice] = env.call('get_attr', 'reward')[this_local_slice]
 
-        # log
-        # print(len(env.statelist)) # 28
-        # print(len(env.statelist[0])) # 1
-        # print(len(env.statelist[0][0])) # 800
-        # print(len(env.statelist[0][0][0]))
-        # print(env.statelist[0][0][0])
-        # import pdb;pdb.set_trace()
         max_rewards = collections.defaultdict(list)
         log_data = dict()
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
-        # print(first_state[0][0])
-        # import pdb;pdb.set_trace()
         
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds

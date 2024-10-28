@@ -9,6 +9,7 @@ sys.stdout = open(sys.stdout.fileno(), mode='w', buffering=1)
 sys.stderr = open(sys.stderr.fileno(), mode='w', buffering=1)
 
 import os
+import shutil
 import pathlib
 import click
 import hydra
@@ -27,9 +28,9 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option('-t', '--te', default=False)
 def main(checkpoint, output_dir, device, speed,closeloop,te):
     if os.path.exists(output_dir):
-        click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
+        # click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
+        shutil.rmtree(output_dir)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
-    
     # load checkpoint
     payload = torch.load(open(checkpoint, 'rb'), pickle_module=dill)
     cfg = payload['cfg']

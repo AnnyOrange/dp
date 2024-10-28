@@ -1,4 +1,5 @@
 import gym
+import cv2
 import numpy as np
 from diffusion_policy.real_world.video_recorder import VideoRecorder
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
@@ -38,23 +39,17 @@ class VideoRecordingWrapper(gym.Wrapper):
         return obs
     
     def step(self, action):
-        # print("step")
-        # import pdb;pdb.set_trace()
+        entropy = action[-1]
+        action = action[:-1]
         result = super().step(action)
-        # print(result)
-        # print(result)
-        # print("obs",result[0])
-        # print("action_in",action.shape)
-        # robo_pos_
-        # print(result)
-        # 如果是pusht的画用这里的
+        
         if self.pusht is True:
             state_data = [{
                 "action": action,
                 "pos_agent": result[-1]['pos_agent']
             }]
             self.statelist.append(state_data)
-        if self.robomimic is True:
+        if self.robomimic is True: 
             # print(result[-1]['robot0_eef_pos'])
             robot0_eef_pos = result[-1]['robot0_eef_pos']
             robot0_eef_quat = result[-1]['robot0_eef_quat']
@@ -87,6 +82,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             frame = self.env.render(
                 mode=self.mode, **self.render_kwargs)
             assert frame.dtype == np.uint8
+            frame = put_text(frame,  f"{entropy:.1e}")
             self.video_recoder.write_frame(frame)
         return result
     
@@ -117,3 +113,32 @@ class VideoRecordingWrapper(gym.Wrapper):
 
         return uagent
 
+def put_text(img, text, is_waypoint=False, font_size=0.8, thickness=1, position="top"):
+    img = img.copy()
+    if position == "top":
+        p = (10, 30)
+    elif position == "bottom":
+        p = (10, img.shape[0] - 60)
+    # put the frame number in the top left corner
+    img = cv2.putText(
+        img,
+        str(text),
+        p,
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_size,
+        (0, 255, 255),
+        thickness,
+        cv2.LINE_AA,
+    )
+    if is_waypoint:
+        img = cv2.putText(
+            img,
+            "*",
+            (10, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            font_size,
+            (255, 255, 0),
+            thickness,
+            cv2.LINE_AA,
+        )
+    return img

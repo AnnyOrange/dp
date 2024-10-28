@@ -222,7 +222,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.fps = fps
         self.crf = crf
         self.n_obs_steps = n_obs_steps
-        self.n_action_steps = n_action_steps #n_action_steps
+        self.n_action_steps = 16 #n_action_steps
         self.n_latency_steps = n_latency_steps
         self.env_n_obs_steps = env_n_obs_steps
         self.env_n_action_steps = env_n_action_steps
@@ -234,8 +234,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.outputdir = output_dir
         self.temporal_agg = te
         self.closeloop = closeloop
-        print("self.temporal_agg",self.temporal_agg)
-        print("self.closeloop",self.closeloop)
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
@@ -250,7 +248,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        max = 0
+        max_entro = None
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -322,7 +320,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
     
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
-                action = np_action_dict['action'][:,self.n_latency_steps:]
+                action = np_action_dict['action_pred'][:,self.n_latency_steps:]
                 if not np.all(np.isfinite(action)):
                     # print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -337,16 +335,14 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 np_sample_dict = dict_apply(sample_dict,
                     lambda x: x.detach().to('cpu').numpy())
 
-                sample = np_sample_dict['action'][:,self.n_latency_steps:]
+                sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
                 if self.abs_action:
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
                 if self.temporal_agg:
                     all_actions = torch.from_numpy(env_action).float() #(28, 8, 7)
-                    print(env_action.shape)
                     all_samples = torch.from_numpy(sample).float()
-                    print(all_samples.shape)
                     all_samples = all_samples.permute(1,2,0,3)
                     # all_actions扩维度 最开始增加维度
                     all_actions = all_actions.unsqueeze(0)
@@ -377,10 +373,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     # tasks_samples_for_curr_step = populated_samples
 
                     entropy = []
+                    idx = 0
                     for task_samples in tasks_samples_for_curr_step:
                         entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                        if max_entro is not None and max_entro[idx]<entro:
+                            max_entro[idx] = entro
+                        idx+=1
                         entropy.append(entro)
-
+                    if max_entro is None:
+                        max_entro = entropy
                     # k = 0.01
                     # weighted_actions = []
                     # for task_actions in tasks_actions_for_curr_step:

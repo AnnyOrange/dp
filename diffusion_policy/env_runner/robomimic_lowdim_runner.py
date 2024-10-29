@@ -148,7 +148,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     n_action_steps=env_n_action_steps,
                     max_episode_steps=max_steps
                 )
-        n_envs = 2
         env_fns = [env_fn] * n_envs
         env_seeds = list()
         env_prefixs = list()
@@ -281,16 +280,16 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             done = False
             t = 0
             state_dim = 7
-            tasks_num = n_envs
+            batch_size = n_envs
             num_samples = 10
             # print(tasks_num)
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
-                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, state_dim]
-            )   
+                    [self.max_steps, self.max_steps + self.n_action_steps, n_envs, state_dim]
+            ).cuda()   
                 all_time_samples = torch.zeros(
-                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, num_samples,state_dim-1]
-            )   
+                    [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
+            ).cuda() 
 
             while not done:
                 # create obs dict
@@ -330,7 +329,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 
                 # step env
                 env_action = action
-                # print("action",action[0,0,:])
+               
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
                 
@@ -344,44 +343,31 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
                 if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float()
-                    all_samples = torch.from_numpy(sample).float()
-                    all_samples = all_samples.permute(1,2,0,3)
+                    all_actions = torch.from_numpy(env_action).float().cuda()
+                    all_samples = torch.from_numpy(sample).float().cuda()
+                    all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
                     # all_actions扩维度 最开始增加维度
-                    all_actions = all_actions.unsqueeze(0)
-                    all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
-                    actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
-                    actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
-                    all_time_samples[[t], :, t : t + self.n_action_steps] = all_samples[:,:,:,:6]  # [400, 56, 450, 10,14]
-                    samples_for_curr_step = all_time_samples[:, :, t]  # [400, 56, 10,14]
+                    all_actions = all_actions.permute(1,0,2) # (16,28,7)
+                    all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
+                    actions_for_curr_step = all_time_actions[:, t]  
+                    actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
+                    all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
+                    samples_for_curr_step = all_time_samples[:, t]  
                     
-                    tasks_actions_for_curr_step = []
-                    tasks_samples_for_curr_step = []
-                    for task_idx in range(all_actions.shape[1]):  # 遍历任务
-                        populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                        tasks_actions_for_curr_step.append(populated_actions)
-
-                        populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                        tasks_samples_for_curr_step.append(populated_samples)
-                    entropy = []
-                    for task_samples in tasks_samples_for_curr_step:
-                        entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                        entropy.append(entro)
-                    entropy = torch.stack(entropy)
-                    entropy = entropy.detach().cpu().numpy()
+                    actions_for_curr_step = actions_for_curr_step[actions_populated]
+                    samples_for_curr_step = samples_for_curr_step[actions_populated]
+                      
+                    entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                    entropy = entropy.permute(1,0,2).detach().cpu().numpy()
 
                     k = 0.01
-                    weighted_actions = []
-                    for task_actions in tasks_actions_for_curr_step:
-                        exp_weights = np.exp(-k * np.arange(len(task_actions)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
-
-                        raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
-                        weighted_actions.append(raw_action)
-                  
-                    weighted_actions = torch.stack(weighted_actions)  
-                    env_action = weighted_actions.detach().cpu().numpy()
+                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                    exp_weights = exp_weights / exp_weights.sum()
+                    exp_weights = (
+                            torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
+                    )
+                    raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
+                    env_action = raw_action.detach().cpu().numpy()
                     t+=1
                 
                 env_action = np.concatenate((env_action, entropy),axis=-1)

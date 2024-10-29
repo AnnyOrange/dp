@@ -288,10 +288,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, state_dim]
-            ).cuda()   
+            ).to(device=device)  
                 all_time_samples = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
-            ).cuda() 
+            ).to(device=device)
             max_entro = None
             entropy_history = []
             while not done:
@@ -346,8 +346,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
                 if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float().cuda()
-                    all_samples = torch.from_numpy(sample).float().cuda()
+                    all_actions = torch.from_numpy(env_action).float().to(device=device)
+                    all_samples = torch.from_numpy(sample).float().to(device=device)
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
                     # all_actions扩维度 最开始增加维度
                     all_actions = all_actions.permute(1,0,2) # (16,28,7)
@@ -371,7 +371,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
                     exp_weights = exp_weights / exp_weights.sum()
                     exp_weights = (
-                            torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
+                            torch.from_numpy(exp_weights).to(device=device).unsqueeze(dim=1).unsqueeze(dim=-1)
                     )
                     raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
                     env_action = raw_action.detach().cpu().numpy()

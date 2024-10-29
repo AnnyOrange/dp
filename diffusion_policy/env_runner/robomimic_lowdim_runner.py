@@ -363,11 +363,18 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                         populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
                         tasks_samples_for_curr_step.append(populated_samples)
                     entropy = []
+                    idx = 0
                     for task_samples in tasks_samples_for_curr_step:
                         entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                        if max_entro[idx]<entro:
+                            max_entro[idx] = entro
+                        idx+=1
                         entropy.append(entro)
+                    if max_entro is None:
+                        max_entro = entropy
                     entropy = torch.stack(entropy)
                     entropy = entropy.detach().cpu().numpy()
+                    
                     k = 0.01
                     weighted_actions = []
                     for task_actions in tasks_actions_for_curr_step:

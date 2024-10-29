@@ -248,7 +248,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        max_entro = None
+        # all_max_entro = []
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -288,7 +288,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 all_time_samples = torch.zeros(
                     [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, num_samples,state_dim-1]
             )   
-
+            max_entro = None
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -366,7 +366,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     idx = 0
                     for task_samples in tasks_samples_for_curr_step:
                         entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                        if max_entro[idx]<entro:
+                        if max_entro[idx]<entro and max_entro is not None:
                             max_entro[idx] = entro
                         idx+=1
                         entropy.append(entro)

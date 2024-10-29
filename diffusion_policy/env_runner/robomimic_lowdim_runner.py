@@ -25,6 +25,7 @@ import robomimic.utils.obs_utils as ObsUtils
 
 import os
 import matplotlib.pyplot as plt
+
 def create_env(env_meta, obs_keys):
     ObsUtils.initialize_obs_modality_mapping_from_dict(
         {'low_dim': obs_keys})
@@ -234,9 +235,12 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.outputdir = output_dir
         self.temporal_agg = te
         self.closeloop = closeloop
+        print("self.temporal_agg",self.temporal_agg)
+        print("self.closeloop",self.closeloop)
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
+        print(device)
         dtype = policy.dtype
         env = self.env
         
@@ -248,7 +252,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        # all_max_entro = []
+
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -278,17 +282,18 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             done = False
             t = 0
             state_dim = 7
-            tasks_num = n_envs
+            batch_size = n_envs
             num_samples = 10
             # print(tasks_num)
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
-                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, state_dim]
-            )   
+                    [self.max_steps, self.max_steps + self.n_action_steps, n_envs, state_dim]
+            ).cuda()   
                 all_time_samples = torch.zeros(
-                    [self.max_steps, tasks_num, self.max_steps + self.n_action_steps, num_samples,state_dim-1]
-            )   
+                    [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
+            ).cuda() 
             max_entro = None
+            entropy_history = []
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -327,10 +332,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 
                 # step env
                 env_action = action
-                
+               
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
-                
                 
                 # process samples:
                 np_sample_dict = dict_apply(sample_dict,
@@ -339,117 +343,53 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
                 if self.abs_action:
                     sample = self.undo_transform_action(sample)
-                    
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
-               
                 # perform temporal ensemble    
                 if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float()
-                    all_samples = torch.from_numpy(sample).float()
-                    all_samples = all_samples.permute(1,2,0,3)
+                    all_actions = torch.from_numpy(env_action).float().cuda()
+                    all_samples = torch.from_numpy(sample).float().cuda()
+                    all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
                     # all_actions扩维度 最开始增加维度
-                    all_actions = all_actions.unsqueeze(0)
-                    all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
-                    actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
-                    actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
-                    all_time_samples[[t], :, t : t + self.n_action_steps] = all_samples[:,:,:,:6]  # [400, 56, 450, 10,14]
-                    samples_for_curr_step = all_time_samples[:, :, t]  # [400, 56, 10,14]
+                    all_actions = all_actions.permute(1,0,2) # (16,28,7)
+                    all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
+                    actions_for_curr_step = all_time_actions[:, t]  
+                    actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
+                    all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
+                    samples_for_curr_step = all_time_samples[:, t]  
                     
-                    tasks_actions_for_curr_step = []
-                    tasks_samples_for_curr_step = []
-                    for task_idx in range(all_actions.shape[1]):  # 遍历任务
-                        populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                        tasks_actions_for_curr_step.append(populated_actions)
-                        populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                        tasks_samples_for_curr_step.append(populated_samples)
-                    entropy = []
-                    idx = 0
-                    for task_samples in tasks_samples_for_curr_step:
-                        entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                        if (max_entro is not None) and max_entro[idx]<entro:
-                            max_entro[idx] = entro
-                        idx+=1
-                        entropy.append(entro)
+                    actions_for_curr_step = actions_for_curr_step[actions_populated]
+                    samples_for_curr_step = samples_for_curr_step[actions_populated]
+                    
+                    entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                    entropy = entropy.permute(1,0,2).detach().cpu().numpy()
+                    entropy_history.append(entropy.flatten())
                     if max_entro is None:
-                        max_entro = entropy
-                    entropy = torch.stack(entropy)
-                    entropy = entropy.detach().cpu().numpy()
-                    
+                        max_entro = torch.tensor(entropy).clone().detach()
+                    else:
+                        max_entro = torch.max(torch.tensor(max_entro), torch.tensor(entropy)).clone().detach()
                     k = 0.01
-                    weighted_actions = []
-                    for task_actions in tasks_actions_for_curr_step:
-                        exp_weights = np.exp(-k * np.arange(len(task_actions)))
-                        exp_weights = exp_weights / exp_weights.sum()
-                        exp_weights = torch.from_numpy(exp_weights).unsqueeze(dim=1)
-                        raw_action = (task_actions * exp_weights).sum(dim=0, keepdim=True)
-                        weighted_actions.append(raw_action)
-                  
-                    weighted_actions = torch.stack(weighted_actions)  
-                    env_action = weighted_actions.detach().cpu().numpy()
+                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+                    exp_weights = exp_weights / exp_weights.sum()
+                    exp_weights = (
+                            torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
+                    )
+                    raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
+                    env_action = raw_action.detach().cpu().numpy()
                     t+=1
-                # if self.temporal_agg:
-                #     all_actions = torch.from_numpy(env_action).float() #(28, 8, 7)
-                #     all_samples = torch.from_numpy(sample).float()
-                #     all_samples = all_samples.permute(1,2,0,3)
-                #     # print("all_sample",all_samples.shape)
-                #     # all_actions扩维度 最开始增加维度
-                #     all_actions = all_actions.unsqueeze(0)
-                #     all_time_actions[[t], :, t : t + self.n_action_steps] = all_actions  # [400, 56, 450, 14]
-                #     actions_for_curr_step = all_time_actions[:, :, t]  # [400, 56, 14]
-                #     actions_populated = torch.all(actions_for_curr_step != 0, axis=2)  # [400, 56]
-                #     all_time_samples[[t], :, t : t + self.n_action_steps] = all_samples[:,:,:,:6]  # [400, 56, 450, 10, 14]
-                #     samples_for_curr_step = all_time_samples[:, :, t]  # [400, 56, 10,14]
-                #     tasks_actions_for_curr_step = []
-                #     tasks_samples_for_curr_step = []
-                #     for task_idx in range(all_actions.shape[1]):  # 遍历任务
-                #         populated_actions = actions_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                #         tasks_actions_for_curr_step.append(populated_actions)
-                #         populated_samples = samples_for_curr_step[:, task_idx][actions_populated[:, task_idx]]
-                #         tasks_samples_for_curr_step.append(populated_samples)
-                #     tasks_samples_for_curr_step = torch.stack(tasks_samples_for_curr_step) if isinstance(tasks_samples_for_curr_step, list) else tasks_samples_for_curr_step
-                #     # print(tasks_samples_for_curr_step.shape)
-                #     # 计算所有任务的熵
-                #     task_variances = torch.var(tasks_samples_for_curr_step.flatten(1, 2), dim=1, keepdim=True)  # [num_tasks, 1, num_features]
-                #     entropy = torch.mean(task_variances, dim=-1, keepdim=True)  # [num_tasks, 1, 1]
-
-                #     # 如果 max_entro 还未初始化，直接将 entropy 赋值给它
-                #     if max_entro is None:
-                #         max_entro = entropy.clone()
-                #     else:
-                #         # 更新 max_entro 中每个任务的熵值，只保留较大的值
-                #         max_entro = torch.max(max_entro, entropy)
-
-                #     # 检查 entropy 的形状
-                #     # print(entropy.shape)  # 应为 (num_tasks, 1, 1)
-
-                #     entropy = entropy.detach().cpu().numpy()
-                #     tasks_actions_for_curr_step = torch.stack(tasks_actions_for_curr_step) if isinstance(tasks_actions_for_curr_step, list) else tasks_actions_for_curr_step
-
-                #     k = 0.01
-                #     # 获取任务数量和动作序列长度
-                #     # 检查 tasks_actions_for_curr_step 形状
-                    
-
-                #     # 检查 exp_weights 形状
-                #     num_tasks, num_actions = tasks_actions_for_curr_step.shape[:2]
-
-                #     # 计算所有动作的指数加权系数，并扩展维度以便与 tasks_actions_for_curr_step 对齐
-                #     exp_weights = torch.from_numpy(np.exp(-k * np.arange(num_actions))).unsqueeze(0).expand(num_tasks, -1)  # [1, num_actions]
-                #     exp_weights = exp_weights / exp_weights.sum()  # 归一化权重
-                #     exp_weights = exp_weights.to(tasks_actions_for_curr_step.device)  # 确保在同一设备上
-                #     exp_weights = exp_weights.unsqueeze(-1)
-                #     # print("tasks_actions_for_curr_step shape:", tasks_actions_for_curr_step.shape) 
-                #     # print("exp_weights shape before view:", exp_weights.shape)
-                #     # 广播乘法以对每个任务的所有动作应用权重，然后对动作维度求和
-                #     weighted_actions = (tasks_actions_for_curr_step * exp_weights).sum(dim=1, keepdim=True)  # [batch, num_tasks, features]
-
-                #     # weighted_actions = torch.stack(weighted_actions)  
-                #     env_action = weighted_actions.detach().cpu().numpy()
-                #     print(env_action.shape)
-                #     import pdb;pdb.set_trace()
-                #     t+=1
-
-
+                else:
+                    task_sample = sample[:,:,:,:6]
+                    task_sample = torch.from_numpy(task_sample).float() if isinstance(task_sample, np.ndarray) else task_sample
+                    entropy = torch.mean(torch.var(task_sample.permute(2,0,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                    entropy = entropy.permute(1,0,2).detach().cpu().numpy()
+                    entropy_history.append(entropy.flatten())
+                    if max_entro is None:
+                        max_entro = torch.tensor(entropy).clone().detach()
+                    else:
+                        max_entro = torch.max(torch.tensor(max_entro), torch.tensor(entropy)).clone().detach()
+                
+                if env_action.shape[1]!=1:
+                    entropy = np.broadcast_to(entropy, (env_action.shape[0], env_action.shape[1], 1))
+                # print(env_action.shape)
                 # print(entropy.shape)
                 env_action = np.concatenate((env_action, entropy),axis=-1)
                 obs, reward, done, info = env.step(env_action)
@@ -465,8 +405,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 f.write("Steps:\n")
                 f.write(", ".join([str(step) for step in steps]))  # Writing the steps as a comma-separated list
                 f.write("\n")
-                f.write("max-entropy:\n")
-                f.write(", ".join([str(entro) for entro in max_entro]))
+                f.write("max_entropy:\n")
+                f.write(", ".join([str(step.item()) for step in max_entro.flatten()]))
                 f.write("\n")
 
             # collect data for this round
@@ -475,7 +415,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
         max_rewards = collections.defaultdict(list)
         log_data = dict()
+        entropy_history_np = np.array(entropy_history)  # 转换为 numpy 数组
+        np.save(os.path.join(self.outputdir, "entropy_history.npy"), entropy_history_np)
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
+        self.plot_Probability_Distribution_Entropy(entropy_history)
         
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
@@ -575,4 +518,13 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # 保存图表
             fig.savefig(save_path)
             plt.close(fig)
+    def plot_Probability_Distribution_Entropy(self,entropy_history):
+        plt.figure(figsize=(10, 6))
+        plt.hist(entropy_history_np.flatten(), bins=50, density=True, alpha=0.7, color='blue')
+        plt.xlabel("Entropy Value")
+        plt.ylabel("Probability Density")
+        plt.title("Probability Distribution of Entropy History")
 
+        # 保存到指定目录
+        plt.savefig(os.path.join(self.outputdir, "distribution.png"))  # 保存图像为 distribution.png
+        plt.show() 

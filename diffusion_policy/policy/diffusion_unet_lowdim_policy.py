@@ -342,10 +342,20 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
             result['obs_pred'] = obs_pred
         return result
 
-    def get_entropy(self,actions):
-        speed = 1
-        return speed
-    def get_entropy_actions(self,obs_dict: Dict[str, torch.Tensor]):
+    def new_action_steps(self,speed):
+        if speed == 1:
+            return 16
+        elif speed == 2:
+            return 8
+        elif speed == 3:
+            return 6
+        elif speed == 4:
+            return 4
+        elif speed ==8:
+            return 2
+        else:
+            return None
+    def get_entropy_actions(self,obs_dict: Dict[str, torch.Tensor],speed:int):
         """
         obs_dict: must include "obs" key
         result: must include "action" key
@@ -356,7 +366,10 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
         # if speed == 3:
         #     self.n_action_steps = 3
         # else:
-        #     self.n_action_steps = self.n_action_steps//speed    
+        #     self.n_action_steps = self.n_action_steps//speed   
+        ori_steps = self.n_action_steps
+        self.n_action_steps = self.new_action_steps(speed)
+        assert self.n_action_steps is not None
         nobs = self.normalizer['obs'].normalize(obs_dict['obs'])
         B, _, Do = nobs.shape
         To = self.n_obs_steps
@@ -406,7 +419,6 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
         # unnormalize prediction
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
-        speed = get_entropy(action_pred)
         action_pred = action_pred[:,::speed,:]
         # get action
         if self.pred_action_steps_only:
@@ -428,6 +440,7 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
             action_obs_pred = obs_pred[:,start:end]
             result['action_obs_pred'] = action_obs_pred
             result['obs_pred'] = obs_pred
+        self.n_action_steps = ori_steps
         return result
     # ========= training  ============
     def set_normalizer(self, normalizer: LinearNormalizer):

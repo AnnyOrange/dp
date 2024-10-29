@@ -22,7 +22,7 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.command()
 @click.option('-c', '--checkpoint', required=True)
 @click.option('-o', '--output_dir', required=True)
-@click.option('-d', '--device', default='cuda:0')
+@click.option('-d', '--device', default='cuda:4')
 @click.option('-s', '--speed', default=1)
 @click.option('-cl', '--closeloop', default=False)
 @click.option('-t', '--te', default=False)

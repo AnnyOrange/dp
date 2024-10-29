@@ -366,7 +366,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     idx = 0
                     for task_samples in tasks_samples_for_curr_step:
                         entro = torch.mean(torch.var(task_samples.flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                        if max_entro[idx]<entro and max_entro is not None:
+                        if (max_entro is not None) and max_entro[idx]<entro:
                             max_entro[idx] = entro
                         idx+=1
                         entropy.append(entro)

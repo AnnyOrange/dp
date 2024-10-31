@@ -381,11 +381,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                             # print(obs_dict_i['obs'].shape)
                             # import pdb;pdb.set_trace()
                             if last_entropy is not None and last_entropy[i]>0.4:
-                                speed_i = speed
+                                speed_i = 4
                             else:
                                 speed_i = speed
-                            action_dict_i = policy.fast_predict_action(obs_dict_i, speed = speed_i)
-                            sample_dict_i = policy.get_samples(obs_dict_i, num_samples=num_samples,speed = speed_i)
+                            action_dict_i = policy.get_entropy_actions(obs_dict_i, speed = speed_i)
+                            sample_dict_i = policy.get_entropy_samples(obs_dict_i, num_samples=num_samples,speed = speed_i)
                         all_time_actions_i = all_time_actions[:, :, i, :].unsqueeze(2)
                         all_time_samples_i = all_time_samples[:,:,i,:,:].unsqueeze(2)
                         env_action_i, entropy_i,entropy_history_i,action_i,all_time_actions_i,all_time_samples_i = self.action_and_sample(action_dict_i,sample_dict_i,num_samples,device,all_time_actions_i,all_time_samples_i,t,entropy_history)
@@ -405,7 +405,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     env_action = np.array(env_action)
                     entropy = np.array(entropy)
                     action = np.array(action)
-                import pdb;pdb.set_trace()
+                # import pdb;pdb.set_trace()
                 print(env_action.shape)
                 print(entropy.shape) 
                 print(action.shape)   
@@ -427,9 +427,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             with open(step_file_path, 'a') as f:
                 f.write("Steps:\n")
                 f.write(", ".join([str(step) for step in steps]))  # Writing the steps as a comma-separated list
-                f.write("\n")
-                f.write("max_entropy:\n")
-                f.write(", ".join([str(step.item()) for step in max_entro.flatten()]))
                 f.write("\n")
 
             # collect data for this round
@@ -586,10 +583,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
             # all_actions扩维度 最开始增加维度
             all_actions = all_actions.permute(1,0,2) # (16,28,7)
-            all_time_actions[[t], t : t + self.n_action_steps] = all_actions # 
+            all_time_actions[[t], t : t + all_actions.shape[0]] = all_actions # 
             actions_for_curr_step = all_time_actions[:, t]  
             actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
-            all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
+            all_time_samples[[t],  t : t + all_samples.shape[0]] = all_samples[:,:,:,:6]  
             samples_for_curr_step = all_time_samples[:, t]  
             
             actions_for_curr_step = actions_for_curr_step[actions_populated]

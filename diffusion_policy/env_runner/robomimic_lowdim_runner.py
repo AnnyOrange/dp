@@ -278,7 +278,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 leave=False, mininterval=self.tqdm_interval_sec)
             steps = np.zeros(n_envs)
             done = False
-            t = 0
+            t = np.zeros(n_envs)
             state_dim = 7
             batch_size = n_envs
             num_samples = 10
@@ -290,7 +290,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 all_time_samples = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
             ).cuda() 
-
+            last_entropy = None
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -313,7 +313,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                         action_dict = policy.predict_action(obs_dict)
                 else:        
                     with torch.no_grad():
-                        action_dict = policy.fast_predict_action(obs_dict,speed = speed)
+                        action_dict = policy.fast_predict_action(obs_dict,speed =1)
                         sample_dict = policy.get_samples(obs_dict, num_samples=num_samples)
 
                 # device_transfer
@@ -341,36 +341,73 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 if self.abs_action:
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
-                # perform temporal ensemble    
-                if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float().cuda()
-                    all_samples = torch.from_numpy(sample).float().cuda()
-                    all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
-                    # all_actions扩维度 最开始增加维度
-                    all_actions = all_actions.permute(1,0,2) # (16,28,7)
-                    all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
-                    actions_for_curr_step = all_time_actions[:, t]  
-                    actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
-                    all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
-                    samples_for_curr_step = all_time_samples[:, t]  
-                    
-                    actions_for_curr_step = actions_for_curr_step[actions_populated]
-                    samples_for_curr_step = samples_for_curr_step[actions_populated]
-                      
-                    entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                    entropy = entropy.permute(1,0,2).detach().cpu().numpy()
+                # print(env_action.shape)
+                # print(sample.shape)
+                entropy = []
+                env_action_ = []
+                for i in range(n_envs):
+                    t_i = int(t[i])
+                    # print(t_i)
+                    if last_entropy is not None and last_entropy[i]>0.4:
+                        speed_i = 4
+                    else:
+                        speed_i = 2
+                    all_time_actions_i = all_time_actions[:, :, i, :].unsqueeze(2)
+                    all_time_samples_i = all_time_samples[:,:,i,:,:].unsqueeze(2)
+                    env_action_i = np.expand_dims(env_action[i,::speed_i,:],axis=0)
+                    sample_i = np.expand_dims(sample[:,i,::speed_i,:],axis=1)
+                    # perform temporal ensemble    
+                    if self.temporal_agg:
+                        all_actions_i = torch.from_numpy(env_action_i).float().cuda()
+                        all_samples_i = torch.from_numpy(sample_i).float().cuda()
+                        all_samples_i = all_samples_i.permute(2,1,0,3)  # (16,28,10,7)
+                        # all_actions扩维度 最开始增加维度
+                        all_actions_i = all_actions_i.permute(1,0,2) # (16,28,7)
+                        # print(all_actions_i.shape) #torch.Size([8, 1, 7])
+                        # print(all_samples_i.shape) #torch.Size([8, 1, 10, 7])
+                        all_time_actions_i[[t_i], t_i : t_i + all_actions_i.shape[0]] = all_actions_i  
+                        actions_for_curr_step_i = all_time_actions_i[:, t_i]  
+                        actions_populated_i = torch.all(actions_for_curr_step_i[:,:,0] != 0, axis=-1)  
+                        all_time_samples_i[[t_i],  t_i : t_i + all_actions_i.shape[0]] = all_samples_i[:,:,:,:6]  
+                        samples_for_curr_step_i = all_time_samples_i[:, t_i]  
+                        
+                        actions_for_curr_step_i = actions_for_curr_step_i[actions_populated_i]
+                        samples_for_curr_step_i = samples_for_curr_step_i[actions_populated_i]
+                        
+                        entropy_i = torch.mean(torch.var(samples_for_curr_step_i.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+                        entropy_i = entropy_i.permute(1,0,2).detach().cpu().numpy()
 
-                    k = 0.01
-                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                    exp_weights = exp_weights / exp_weights.sum()
-                    exp_weights = (
-                            torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
-                    )
-                    raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
-                    env_action = raw_action.detach().cpu().numpy()
-                    t+=1
-                
-                env_action = np.concatenate((env_action, entropy),axis=-1)
+                        k = 0.01
+                        exp_weights_i = np.exp(-k * np.arange(len(actions_for_curr_step_i)))
+                        exp_weights_i = exp_weights_i / exp_weights_i.sum()
+                        exp_weights_i = (
+                                torch.from_numpy(exp_weights_i).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
+                        )
+                        raw_action_i = (actions_for_curr_step_i * exp_weights_i).sum(dim=0, keepdim=True).permute(1,0,2)
+                        env_action_i = raw_action_i.squeeze(0)
+                        env_action_i = env_action_i.detach().cpu().numpy()
+                        t[i]+=1
+                        # print(entropy_i.shape) #(1,1,1)
+                        # print(env_action_i.shape) # (1,7)
+                    entropy.append(entropy_i.reshape(1,1))
+                    env_action_.append(env_action_i)
+                    entropy = np.array(entropy)
+                    env_action_ = np.array(env_action_)
+                    # print(entropy.shape)
+                    # print(env_action_.shape)
+                    entropy = entropy.tolist()
+                    env_action_ = env_action_.tolist()
+                    # import pdb;pdb.set_trace()
+                    all_time_actions[:,:,i,:] = all_time_actions_i.squeeze(2)
+                    all_time_samples[:,:,i,:,:] = all_time_samples_i.squeeze(2)
+                entropy = np.array(entropy)
+                env_action_ = np.array(env_action_)
+                # print(entropy.shape)
+                # print(env_action_.shape)
+                # import pdb;pdb.set_trace()
+                env_action = np.concatenate((env_action_, entropy),axis=-1)
+                last_entropy = self.entropy_trans(entropy)
+                # print(last_entropy)
                 obs, reward, done, info = env.step(env_action)
                 steps += (reward == 0)
                 done = np.all(done)
@@ -491,4 +528,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # 保存图表
             fig.savefig(save_path)
             plt.close(fig)
+    def entropy_trans(self,entropy_values):
+        epsilon = 1e-8
+        log_transformed_values = np.log(entropy_values.flatten() + epsilon)
+        min_val = np.min(log_transformed_values)
+        max_val = np.max(log_transformed_values)
+        normalized_values = (log_transformed_values - min_val) / (max_val - min_val)
+        return normalized_values
 

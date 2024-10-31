@@ -386,13 +386,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                                 speed_i = speed
                             action_dict_i = policy.fast_predict_action(obs_dict_i, speed = speed_i)
                             sample_dict_i = policy.get_samples(obs_dict_i, num_samples=num_samples,speed = speed_i)
-                        env_action_i, entropy_i,entropy_history_i,action_i,all_time_actions_i,all_time_samples_i = self.action_and_sample(action_dict_i,sample_dict_i,num_samples,device,all_time_actions[:,:,i,:,:],all_time_samples[:,:,i,:,:],t,entropy_history)
+                        all_time_actions_i = all_time_actions[:, :, i, :].unsqueeze(2)
+                        all_time_samples_i = all_time_samples[:,:,i,:,:].unsqueeze(2)
+                        env_action_i, entropy_i,entropy_history_i,action_i,all_time_actions_i,all_time_samples_i = self.action_and_sample(action_dict_i,sample_dict_i,num_samples,device,all_time_actions_i,all_time_samples_i,t,entropy_history)
                         env_action_i = env_action_i.squeeze(0)  # (1, 1, 7) -> (1, 7)
                         entropy_i = entropy_i.squeeze(0)# 
                         # print(action_i.shape)
                         action_i = action_i.squeeze(0)
-                        all_time_actions[:,:,i,:,:] = all_time_actions_i
-                        all_time_samples[:,:,i,:,:] = all_time_samples_i
+                        all_time_actions[:,:,i,:] = all_time_actions_i.squeeze(2)
+                        all_time_samples[:,:,i,:,:] = all_time_samples_i.squeeze(2)
                         # print(env_action_i.shape)
                         # print(entropy_i.shape)
                         # import pdb;pdb.set_trace()
@@ -579,12 +581,12 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
         # perform temporal ensemble    
         if self.temporal_agg:
-            all_actions = torch.from_numpy(env_action).float().to(device=device)
+            all_actions = torch.from_numpy(env_action).float().to(device=device) # [28, 8, 7]
             all_samples = torch.from_numpy(sample).float().to(device=device)
             all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
             # all_actions扩维度 最开始增加维度
             all_actions = all_actions.permute(1,0,2) # (16,28,7)
-            all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
+            all_time_actions[[t], t : t + self.n_action_steps] = all_actions # 
             actions_for_curr_step = all_time_actions[:, t]  
             actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
             all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  

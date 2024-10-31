@@ -70,7 +70,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             n_envs=None,
             speed=1,
             closeloop=False,
-            te=False
+            te=False,
+            is_entropy=False
         ):
         """
         Assuming:
@@ -235,8 +236,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.outputdir = output_dir
         self.temporal_agg = te
         self.closeloop = closeloop
-        print("self.temporal_agg",self.temporal_agg)
-        print("self.closeloop",self.closeloop)
+        self.is_entropy = is_entropy
 
     def run(self, policy: BaseLowdimPolicy,speed = 1):
         device = policy.device
@@ -292,8 +292,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 all_time_samples = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
             ).to(device=device)
+                
             max_entro = None
             entropy_history = []
+            last_entropy = None
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -302,6 +304,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 }
                 if self.past_action and (past_action is not None):
                     # TODO: not tested
+                    print("yeah")
                     np_obs_dict['past_action'] = past_action[
                         :,-(self.n_obs_steps-1):].astype(np.float32)
                 
@@ -309,89 +312,107 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 obs_dict = dict_apply(np_obs_dict, 
                     lambda x: torch.from_numpy(x).to(
                         device=device))
-
                 # run policy
                 if self.closeloop is True and self.temporal_agg is False:
                     with torch.no_grad():
                         action_dict = policy.predict_action(obs_dict)
-                else:        
+                    np_action_dict = dict_apply(action_dict,
+                        lambda x: x.detach().to('cpu').numpy())
+                    action = np_action_dict['action'][:,self.n_latency_steps:]
+                    if not np.all(np.isfinite(action)):
+                        # print(action)
+                        raise RuntimeError("Nan or Inf action")
+                    # step env
+                    env_action = action
+                    if self.abs_action:
+                        env_action = self.undo_transform_action(action)
+                    entropy = np.zeros([env_action[0],env_action[1],1])
+                elif self.is_entropy is False and self.closeloop is False:
                     with torch.no_grad():
-                        action_dict = policy.fast_predict_action(obs_dict,speed = speed)
+                        action_dict = policy.fast_predict_action(obs_dict, speed = speed)
                         sample_dict = policy.get_samples(obs_dict, num_samples=num_samples,speed = speed)
-
-                # device_transfer
-                np_action_dict = dict_apply(action_dict,
-                    lambda x: x.detach().to('cpu').numpy())
-    
-                # handle latency_steps, we discard the first n_latency_steps actions
-                # to simulate latency
-                action = np_action_dict['action_pred'][:,self.n_latency_steps:]
-                if not np.all(np.isfinite(action)):
-                    # print(action)
-                    raise RuntimeError("Nan or Inf action")
-                
-                # step env
-                env_action = action
-               
-                if self.abs_action:
-                    env_action = self.undo_transform_action(action)
-                
-                # process samples:
-                np_sample_dict = dict_apply(sample_dict,
-                    lambda x: x.detach().to('cpu').numpy())
-
-                sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
-                if self.abs_action:
-                    sample = self.undo_transform_action(sample)
-                sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
-                # perform temporal ensemble    
-                if self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float().to(device=device)
-                    all_samples = torch.from_numpy(sample).float().to(device=device)
-                    all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
-                    # all_actions扩维度 最开始增加维度
-                    all_actions = all_actions.permute(1,0,2) # (16,28,7)
-                    all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
-                    actions_for_curr_step = all_time_actions[:, t]  
-                    actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
-                    all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
-                    samples_for_curr_step = all_time_samples[:, t]  
+                    np_action_dict = dict_apply(action_dict,
+                        lambda x: x.detach().to('cpu').numpy())
+                    # handle latency_steps, we discard the first n_latency_steps actions
+                    # to simulate latency
+                    action = np_action_dict['action'][:,self.n_latency_steps:]
+                    if not np.all(np.isfinite(action)):
+                        # print(action)
+                        raise RuntimeError("Nan or Inf action")
                     
-                    actions_for_curr_step = actions_for_curr_step[actions_populated]
-                    samples_for_curr_step = samples_for_curr_step[actions_populated]
+                    # step env
+                    env_action = action
+                
+                    if self.abs_action:
+                        env_action = self.undo_transform_action(action)
                     
-                    entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
-                    entropy = entropy.permute(1,0,2).detach().cpu().numpy()
-                    entropy_history.append(entropy.flatten())
-                    if max_entro is None:
-                        max_entro = torch.tensor(entropy).clone().detach()
-                    else:
-                        max_entro = torch.max(torch.tensor(max_entro), torch.tensor(entropy)).clone().detach()
-                    k = 0.01
-                    exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
-                    exp_weights = exp_weights / exp_weights.sum()
-                    exp_weights = (
-                            torch.from_numpy(exp_weights).to(device=device).unsqueeze(dim=1).unsqueeze(dim=-1)
-                    )
-                    raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
-                    env_action = raw_action.detach().cpu().numpy()
-                    t+=1
-                else:
+                    # process samples:
+                    np_sample_dict = dict_apply(sample_dict,
+                        lambda x: x.detach().to('cpu').numpy())
+
+                    sample = np_sample_dict['action'][:,self.n_latency_steps:]
+                    if self.abs_action:
+                        sample = self.undo_transform_action(sample)
+                    sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                     task_sample = sample[:,:,:,:6]
                     task_sample = torch.from_numpy(task_sample).float() if isinstance(task_sample, np.ndarray) else task_sample
                     entropy = torch.mean(torch.var(task_sample.permute(2,0,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
                     entropy = entropy.permute(1,0,2).detach().cpu().numpy()
                     entropy_history.append(entropy.flatten())
-                    if max_entro is None:
-                        max_entro = torch.tensor(entropy).clone().detach()
-                    else:
-                        max_entro = torch.max(torch.tensor(max_entro), torch.tensor(entropy)).clone().detach()
-                
+                        
+                elif self.is_entropy is False and self.closeloop is True:        
+                    with torch.no_grad():
+                        action_dict = policy.fast_predict_action(obs_dict, speed = speed)
+                        sample_dict = policy.get_samples(obs_dict, num_samples=num_samples,speed = speed)
+                    # action = np_action_dict['action'][:,self.n_latency_steps:]
+                    env_action, entropy,entropy_history,action,all_time_actions,all_time_samples = self.action_and_sample(action_dict,sample_dict,num_samples,device,all_time_actions,all_time_samples,t,entropy_history)
+                    
+                elif self.is_entropy is True and self.closeloop is True:
+                    env_action = []
+                    entropy = []
+                    action = []
+                    obs = obs_dict['obs']
+                    for i in range(n_envs):
+                        with torch.no_grad():
+                            obs_i = obs[i, :, :].unsqueeze(0)
+                            obs_dict_i = {'obs':obs_i}
+                            # print(obs_i.shape)
+                            # print(obs_dict_i)
+                            # print(obs_dict_i['obs'].shape)
+                            # import pdb;pdb.set_trace()
+                            if last_entropy is not None and last_entropy[i]>0.4:
+                                speed_i = speed
+                            else:
+                                speed_i = speed
+                            action_dict_i = policy.fast_predict_action(obs_dict_i, speed = speed_i)
+                            sample_dict_i = policy.get_samples(obs_dict_i, num_samples=num_samples,speed = speed_i)
+                        env_action_i, entropy_i,entropy_history_i,action_i,all_time_actions_i,all_time_samples_i = self.action_and_sample(action_dict_i,sample_dict_i,num_samples,device,all_time_actions[:,:,i,:,:],all_time_samples[:,:,i,:,:],t,entropy_history)
+                        env_action_i = env_action_i.squeeze(0)  # (1, 1, 7) -> (1, 7)
+                        entropy_i = entropy_i.squeeze(0)# 
+                        # print(action_i.shape)
+                        action_i = action_i.squeeze(0)
+                        all_time_actions[:,:,i,:,:] = all_time_actions_i
+                        all_time_samples[:,:,i,:,:] = all_time_samples_i
+                        # print(env_action_i.shape)
+                        # print(entropy_i.shape)
+                        # import pdb;pdb.set_trace()
+                        env_action.append(env_action_i)
+                        entropy.append(entropy_i)
+                        action.append(action_i)
+                        entropy_history.append(entropy_history_i)
+                    env_action = np.array(env_action)
+                    entropy = np.array(entropy)
+                    action = np.array(action)
+                import pdb;pdb.set_trace()
+                print(env_action.shape)
+                print(entropy.shape) 
+                print(action.shape)   
                 if env_action.shape[1]!=1:
                     entropy = np.broadcast_to(entropy, (env_action.shape[0], env_action.shape[1], 1))
                 # print(env_action.shape)
                 # print(entropy.shape)
                 env_action = np.concatenate((env_action, entropy),axis=-1)
+                last_entropy = self.entropy_trans(entropy)
                 obs, reward, done, info = env.step(env_action)
                 steps += (reward == 0)
                 done = np.all(done)
@@ -418,7 +439,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         entropy_history_np = np.array(entropy_history)  # 转换为 numpy 数组
         np.save(os.path.join(self.outputdir, "entropy_history.npy"), entropy_history_np)
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
-        self.plot_Probability_Distribution_Entropy(entropy_history)
+        self.plot_Probability_Distribution_Entropy(entropy_history_np)
         
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
@@ -518,7 +539,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # 保存图表
             fig.savefig(save_path)
             plt.close(fig)
-    def plot_Probability_Distribution_Entropy(self,entropy_history):
+            
+    def plot_Probability_Distribution_Entropy(self,entropy_history_np):
         plt.figure(figsize=(10, 6))
         plt.hist(entropy_history_np.flatten(), bins=50, density=True, alpha=0.7, color='blue')
         plt.xlabel("Entropy Value")
@@ -528,3 +550,67 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # 保存到指定目录
         plt.savefig(os.path.join(self.outputdir, "distribution.png"))  # 保存图像为 distribution.png
         plt.show() 
+        
+    def action_and_sample(self,action_dict,sample_dict,num_samples,device,all_time_actions,all_time_samples,t,entropy_history):
+        # device_transfer
+        np_action_dict = dict_apply(action_dict,
+            lambda x: x.detach().to('cpu').numpy())
+
+        # handle latency_steps, we discard the first n_latency_steps actions
+        # to simulate latency
+        action = np_action_dict['action'][:,self.n_latency_steps:]
+        if not np.all(np.isfinite(action)):
+            # print(action)
+            raise RuntimeError("Nan or Inf action")
+        
+        # step env
+        env_action = action
+    
+        if self.abs_action:
+            env_action = self.undo_transform_action(action)
+        
+        # process samples:
+        np_sample_dict = dict_apply(sample_dict,
+            lambda x: x.detach().to('cpu').numpy())
+
+        sample = np_sample_dict['action'][:,self.n_latency_steps:]
+        if self.abs_action:
+            sample = self.undo_transform_action(sample)
+        sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
+        # perform temporal ensemble    
+        if self.temporal_agg:
+            all_actions = torch.from_numpy(env_action).float().to(device=device)
+            all_samples = torch.from_numpy(sample).float().to(device=device)
+            all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
+            # all_actions扩维度 最开始增加维度
+            all_actions = all_actions.permute(1,0,2) # (16,28,7)
+            all_time_actions[[t], t : t + self.n_action_steps] = all_actions  
+            actions_for_curr_step = all_time_actions[:, t]  
+            actions_populated = torch.all(actions_for_curr_step[:,:,0] != 0, axis=-1)  
+            all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]  
+            samples_for_curr_step = all_time_samples[:, t]  
+            
+            actions_for_curr_step = actions_for_curr_step[actions_populated]
+            samples_for_curr_step = samples_for_curr_step[actions_populated]
+            
+            entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0,keepdim=True),dim=-1,keepdim=True)
+            entropy = entropy.permute(1,0,2).detach().cpu().numpy()
+            entropy_history.append(entropy.flatten())
+            k = 0.01
+            exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
+            exp_weights = exp_weights / exp_weights.sum()
+            exp_weights = (
+                    torch.from_numpy(exp_weights).to(device=device).unsqueeze(dim=1).unsqueeze(dim=-1)
+            )
+            raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
+            env_action = raw_action.detach().cpu().numpy()
+            t+=1
+        return env_action, entropy,entropy_history,action,all_time_actions,all_time_samples
+    
+    def entropy_trans(self,entropy_values):
+        epsilon = 1e-8
+        log_transformed_values = np.log(entropy_values.flatten() + epsilon)
+        min_val = np.min(log_transformed_values)
+        max_val = np.max(log_transformed_values)
+        normalized_values = (log_transformed_values - min_val) / (max_val - min_val)
+        return normalized_values

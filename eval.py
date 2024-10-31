@@ -26,7 +26,8 @@ from diffusion_policy.workspace.base_workspace import BaseWorkspace
 @click.option('-s', '--speed', default=1)
 @click.option('-cl', '--closeloop', default=False)
 @click.option('-t', '--te', default=False)
-def main(checkpoint, output_dir, device, speed,closeloop,te):
+@click.option('-i', '--is_entropy', default=False)
+def main(checkpoint, output_dir, device, speed,closeloop,te,is_entropy):
     if os.path.exists(output_dir):
         # click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
         shutil.rmtree(output_dir)
@@ -52,11 +53,11 @@ def main(checkpoint, output_dir, device, speed,closeloop,te):
         cfg.task.env_runner['n_action_steps'] = speed
         policy.n_action_steps = speed
     else:
-        cfg.task.env_runner['n_action_steps'] = int(16//speed)
-        policy.n_action_steps = int(16//speed)
+        cfg.task.env_runner['n_action_steps'] = int(cfg.task.env_runner['n_action_steps']//speed)
+        policy.n_action_steps = int(policy.n_action_steps//speed)
         if speed==3:
-            cfg.task.env_runner['n_action_steps'] = 6
-            policy.n_action_steps = 6
+            cfg.task.env_runner['n_action_steps'] = 3
+            policy.n_action_steps = 3
     if te is True and closeloop is False:
         raise ValueError("Error: `te` is True and `closeloop` is False, which is not allowed.")
     # run eval
@@ -65,7 +66,8 @@ def main(checkpoint, output_dir, device, speed,closeloop,te):
         output_dir=output_dir,
         speed = speed,
         closeloop = closeloop,
-        te = te)
+        te = te,
+        is_entropy = is_entropy)
     runner_log = env_runner.run(policy,speed = speed)
     
     # dump log to json

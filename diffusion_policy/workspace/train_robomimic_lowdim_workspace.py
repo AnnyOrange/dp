@@ -51,7 +51,6 @@ class TrainRobomimicLowdimWorkspace(BaseWorkspace):
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
-
         # resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()

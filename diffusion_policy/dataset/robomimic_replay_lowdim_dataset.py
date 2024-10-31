@@ -41,6 +41,8 @@ class RobomimicReplayLowdimDataset(BaseLowdimDataset):
             from_rep='axis_angle', to_rep=rotation_rep)
 
         replay_buffer = ReplayBuffer.create_empty_numpy()
+        max_len = 0
+        episodes_store = []
         with h5py.File(dataset_path) as file:
             demos = file['data']
             for i in tqdm(range(len(demos)), desc="Loading hdf5 to ReplayBuffer"):
@@ -51,8 +53,10 @@ class RobomimicReplayLowdimDataset(BaseLowdimDataset):
                     obs_keys=obs_keys,
                     abs_action=abs_action,
                     rotation_transformer=rotation_transformer)
+                max_len = len(demo['actions']) if len(demo['actions'])>max_len else max_len
+                episodes_store.append(episode)
                 replay_buffer.add_episode(episode)
-
+        
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes, 
             val_ratio=val_ratio,
@@ -78,7 +82,40 @@ class RobomimicReplayLowdimDataset(BaseLowdimDataset):
         self.pad_before = pad_before
         self.pad_after = pad_after
         self.use_legacy_normalizer = use_legacy_normalizer
+        self.process_episode(episodes_store, max_len)
     
+    def process_episode(self, episodes, max_len):
+        b = len(episodes)
+        o = episodes[0]['obs'].shape[-1]
+        a = episodes[0]['action'].shape[-1]
+        obs = np.zeros((b, max_len, o)).astype(np.float32)
+        action = np.zeros((b, max_len, a)).astype(np.float32)
+        entropy = np.zeros((b, max_len, 1)).astype(np.float32)
+        index = []
+        for i in range(b):
+            obs[i, :episodes[i]['obs'].shape[0]] = episodes[i]['obs']
+            action[i, :episodes[i]['action'].shape[0]] = episodes[i]['action']
+            index.append(episodes[i]['obs'].shape[0])
+        self.episodes_pad = {'obs':obs,'action':action,'entropy':entropy,'index':index}
+    
+    def get_episodes_pad(self):
+        return self.episodes_pad
+
+    def update_datasets(self, episodes):
+        replay_buffer = ReplayBuffer.create_empty_numpy()
+        for i in range(len(episodes)):
+            replay_buffer.add_episode(episodes[f'demo_{i}'])
+
+        sampler = SequenceSampler(
+            replay_buffer=replay_buffer, 
+            sequence_length=self.horizon,
+            pad_before=self.pad_before, 
+            pad_after=self.pad_after,
+            episode_mask=self.train_mask)
+        
+        self.replay_buffer = replay_buffer
+        self.sampler = sampler
+        
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler = SequenceSampler(
@@ -112,9 +149,12 @@ class RobomimicReplayLowdimDataset(BaseLowdimDataset):
         
         # aggregate obs stats
         obs_stat = array_to_stats(self.replay_buffer['obs'])
-
+        
 
         normalizer['obs'] = normalizer_from_stat(obs_stat)
+        # TODO: write a log normalizer for entropy
+        entropy_stat = array_to_stats(self.replay_buffer['entropy'])
+        normalizer['entropy'] = normalizer_from_stat(entropy_stat)
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
@@ -161,8 +201,10 @@ def _data_to_obs(raw_obs, raw_actions, obs_keys, abs_action, rotation_transforme
         if is_dual_arm:
             raw_actions = raw_actions.reshape(-1,20)
     
+    entropy = (np.zeros((obs.shape[0], 1))+1e-3).astype(np.float32) # prevent zero
     data = {
         'obs': obs,
-        'action': raw_actions
+        'action': raw_actions,
+        'entropy': entropy
     }
     return data

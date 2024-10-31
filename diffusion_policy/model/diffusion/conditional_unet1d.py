@@ -75,9 +75,12 @@ class ConditionalUnet1D(nn.Module):
         down_dims=[256,512,1024],
         kernel_size=3,
         n_groups=8,
-        cond_predict_scale=False
+        cond_predict_scale=False,
+        predict_entropy = True,
         ):
         super().__init__()
+        if predict_entropy:
+            input_dim = input_dim + 1
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
 

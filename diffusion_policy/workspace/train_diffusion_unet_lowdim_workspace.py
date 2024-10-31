@@ -59,11 +59,19 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
 
         self.global_step = 0
         self.epoch = 0
+    
+    def update_dataloader(self, dataset, updated_demos):
+        cfg = self.cfg
+        dataset.update_datasets(updated_demos)
+        train_dataloader = DataLoader(dataset, **cfg.dataloader)
+
+        val_dataset = dataset.get_validation_dataset()
+        val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
+        return train_dataloader, val_dataloader
 
     def run(self):
         cfg = copy.deepcopy(self.cfg)
-        print(cfg)
-        # import pdb
+
         # resume training
         if cfg.training.resume:
             lastest_ckpt_path = self.get_checkpoint_path()
@@ -77,7 +85,6 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
         assert isinstance(dataset, BaseLowdimDataset)
         train_dataloader = DataLoader(dataset, **cfg.dataloader)
         normalizer = dataset.get_normalizer()
-
         # configure validation dataset
         val_dataset = dataset.get_validation_dataset()
         val_dataloader = DataLoader(val_dataset, **cfg.val_dataloader)
@@ -215,10 +222,15 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch>0:
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)
+                # label entropy
+                label_every = 50
+                if (self.epoch % label_every) == 0 and self.epoch>0:
+                    updated_demos = env_runner.label_entropy(policy, dataset.get_episodes_pad())
+                    train_dataloader, val_dataloader = self.update_dataloader(dataset, updated_demos)
 
                 # run validation
                 if (self.epoch % cfg.training.val_every) == 0:
@@ -266,7 +278,7 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
                         del mse
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0:
+                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch>0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
                         self.save_checkpoint()

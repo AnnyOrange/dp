@@ -250,7 +250,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-
+        
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -286,10 +286,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, state_dim]
-            ).cuda()   
+                ).cuda()   
                 all_time_samples = torch.zeros(
                     [self.max_steps, self.max_steps + self.n_action_steps, n_envs, num_samples, state_dim-1]
-            ).cuda() 
+                ).cuda() 
 
             while not done:
                 # create obs dict
@@ -297,6 +297,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     # handle n_latency_steps by discarding the last n_latency_steps
                     'obs': obs[:,:self.n_obs_steps].astype(np.float32)
                 }
+                
                 if self.past_action and (past_action is not None):
                     # TODO: not tested
                     np_obs_dict['past_action'] = past_action[
@@ -323,6 +324,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # handle latency_steps, we discard the first n_latency_steps actions
                 # to simulate latency
                 action = np_action_dict['action_pred'][:,self.n_latency_steps:]
+                entropy = np_action_dict['entropy_pred'][:,self.n_latency_steps:]
                 if not np.all(np.isfinite(action)):
                     # print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -332,7 +334,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                
                 if self.abs_action:
                     env_action = self.undo_transform_action(action)
-                
+               
                 # process samples:
                 np_sample_dict = dict_apply(sample_dict,
                     lambda x: x.detach().to('cpu').numpy())
@@ -342,7 +344,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
-                if self.temporal_agg:
+                if False: # self.temporal_agg:
                     all_actions = torch.from_numpy(env_action).float().cuda()
                     all_samples = torch.from_numpy(sample).float().cuda()
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
@@ -422,6 +424,106 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             log_data[name] = value
 
         return log_data
+    
+
+    def label_entropy(self, policy: BaseLowdimPolicy,episodes, speed = 1):
+        device = policy.device
+        dtype = policy.dtype
+        
+        # plan for rollout
+        B, T, o = episodes['obs'].shape
+        n_envs = 100
+        n_inits = B
+        n_chunks = math.ceil(n_inits / n_envs)
+        
+        episodes_obs = episodes['obs'].reshape(n_chunks, n_envs, T, o)
+        episodes_entropy = np.zeros((n_chunks, n_envs, T, 1))
+        for chunk_idx in range(n_chunks):
+            start = chunk_idx * n_envs
+            end = min(n_inits, start + n_envs)
+            this_global_slice = slice(start, end)
+            this_n_active_envs = end - start
+            this_local_slice = slice(0,this_n_active_envs)
+            
+            this_init_fns = self.env_init_fn_dills[this_global_slice]
+            n_diff = n_envs - len(this_init_fns)
+            if n_diff > 0:
+                this_init_fns.extend([self.env_init_fn_dills[0]]*n_diff)
+            assert len(this_init_fns) == n_envs
+
+            # start rollout
+            past_action = None
+            policy.reset()
+
+            env_name = self.env_meta['env_name']
+            
+            steps = np.zeros(n_envs)
+            done = False
+            state_dim = 7
+            batch_size = n_envs
+            num_samples = 10
+            temporal_agg = True
+            if temporal_agg:
+                all_time_samples = torch.zeros(
+                    [T, T + self.n_action_steps, n_envs, num_samples, state_dim-1]
+            ).cuda() 
+            
+            for t in tqdm.tqdm(range(T), desc=f"Labeling entropy {chunk_idx+1}/{n_chunks}"):
+                if t+1 >= self.n_obs_steps:
+                    obs = episodes_obs[chunk_idx,:,t-self.n_obs_steps+1:t+1]
+                else:
+                    obs = np.zeros((n_envs, self.n_obs_steps, o))
+                    obs[:,:] = episodes_obs[chunk_idx,:,t:t+1]
+                # create obs dict
+                np_obs_dict = {
+                    # handle n_latency_steps by discarding the last n_latency_steps
+                    'obs': obs[:,:self.n_obs_steps].astype(np.float32)
+                }
+                
+                # device transfer
+                obs_dict = dict_apply(np_obs_dict, 
+                    lambda x: torch.from_numpy(x).to(
+                        device=device))
+
+                # run policy
+                with torch.no_grad():
+                    sample_dict = policy.get_samples(obs_dict, num_samples=num_samples)
+
+                # process samples:
+                np_sample_dict = dict_apply(sample_dict,
+                    lambda x: x.detach().to('cpu').numpy())
+
+                sample = np_sample_dict['action_pred'][:,self.n_latency_steps:]
+                if self.abs_action:
+                    sample = self.undo_transform_action(sample)
+                sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
+                # perform temporal ensemble    
+                if temporal_agg:
+                    all_samples = torch.from_numpy(sample).float().cuda()
+                    all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7) 
+                    all_time_samples[[t],  t : t + self.n_action_steps] = all_samples[:,:,:,:6]    
+                    samples_for_curr_step = all_time_samples[:, t]  
+                    
+                    actions_populated = torch.all(samples_for_curr_step[:,:,0,0] != 0, axis=-1)
+                    samples_for_curr_step = samples_for_curr_step[actions_populated]
+                      
+                    entropy = torch.mean(torch.var(samples_for_curr_step.permute(0,2,1,3).flatten(0,1),dim=0),dim=-1,keepdim=True)
+                    entropy = entropy.detach().cpu().numpy().astype(np.float32)
+
+                episodes_entropy[chunk_idx,:,t] = entropy
+
+        episodes_entropy = episodes_entropy.reshape(B, T, 1)  
+        episodes_obs = episodes_obs.reshape(B, T, o)
+        updated_demos = {}
+        # remove zero elements
+        for i in range(B):
+            index = episodes['index'][i]          
+            action = episodes['action'][i, :index] 
+            obs = episodes_obs[i, :index]           
+            updated_entropy = episodes_entropy[i, :index]
+            updated_demos[f'demo_{i}'] = {'obs':obs,'action':action,'entropy':updated_entropy}
+                  
+        return updated_demos
 
     def undo_transform_action(self, action):
         raw_shape = action.shape

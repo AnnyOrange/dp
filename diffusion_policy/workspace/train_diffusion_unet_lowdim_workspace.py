@@ -222,12 +222,14 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
                 policy.eval()
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch>0:
+                rollout_every = 200 # 50
+                # if (self.epoch % cfg.training.rollout_every) == 0 and self.epoch>0:
+                if (self.epoch % rollout_every) == 0 and self.epoch>0:
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)
                 # label entropy
-                label_every = 50
+                label_every = 1000  # 50
                 if (self.epoch % label_every) == 0 and self.epoch>0:
                     updated_demos = env_runner.label_entropy(policy, dataset.get_episodes_pad())
                     train_dataloader, val_dataloader = self.update_dataloader(dataset, updated_demos)
@@ -278,7 +280,8 @@ class TrainDiffusionUnetLowdimWorkspace(BaseWorkspace):
                         del mse
                 
                 # checkpoint
-                if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch>0:
+                # if (self.epoch % cfg.training.checkpoint_every) == 0 and self.epoch>0:
+                if (self.epoch % rollout_every) == 0 and self.epoch>0:
                     # checkpointing
                     if cfg.checkpoint.save_last_ckpt:
                         self.save_checkpoint()

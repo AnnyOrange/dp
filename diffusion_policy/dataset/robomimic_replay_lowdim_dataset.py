@@ -201,7 +201,7 @@ def _data_to_obs(raw_obs, raw_actions, obs_keys, abs_action, rotation_transforme
         if is_dual_arm:
             raw_actions = raw_actions.reshape(-1,20)
     
-    entropy = (np.zeros((obs.shape[0], 1))+1e-3).astype(np.float32) # prevent zero
+    entropy = (np.zeros((obs.shape[0], 1))+1e-5).astype(np.float32) # prevent zero, 1e-5 for tool_hang
     data = {
         'obs': obs,
         'action': raw_actions,

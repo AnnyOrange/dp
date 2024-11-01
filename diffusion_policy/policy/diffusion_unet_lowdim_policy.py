@@ -253,7 +253,8 @@ class DiffusionUnetLowdimPolicy(BaseLowdimPolicy):
             entropy_pred = None
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
         action_pred = action_pred[:,::speed,:]
-        entropy_pred = entropy_pred[:,::speed,:]
+        if self.predict_entropy:
+            entropy_pred = entropy_pred[:,::speed,:]
         # get action
         if self.pred_action_steps_only:
             action = action_pred

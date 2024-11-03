@@ -82,7 +82,10 @@ class VideoRecordingWrapper(gym.Wrapper):
             frame = self.env.render(
                 mode=self.mode, **self.render_kwargs)
             assert frame.dtype == np.uint8
-            frame = put_text(frame,  f"{entropy:.1e}")
+            if entropy>0.4:
+                frame = put_text(frame,  f"4x{entropy:.1e}")
+            else:
+                frame = put_text(frame,  f"2x{entropy:.1e}")
             self.video_recoder.write_frame(frame)
         return result
     

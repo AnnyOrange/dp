@@ -246,7 +246,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         n_envs = len(self.env_fns)
         n_inits = len(self.env_init_fn_dills)
         n_chunks = math.ceil(n_inits / n_envs)
-
+        total_step = []
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
@@ -291,7 +291,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 all_time_samples = torch.zeros(
                     [self.n_action_steps, self.n_action_steps, n_envs, num_samples, state_dim-1]
                 ).to(device) 
-            last_entropy = None
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -399,7 +398,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 entropy = self.trans_entropy(entropy,min_val,max_val)
                 # print(entropy)
                 env_action = np.concatenate((env_action, entropy),axis=-1)
-                last_entropy = entropy
                 obs, reward, done, info = env.step(env_action)
                 steps += (reward == 0)
                 done = np.all(done)
@@ -413,7 +411,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # 保存 entropy_history 为 .npy 文件
             np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
-            
+            total_step.extend(steps)
             # 将entropy_history 按照任务数分别进行min max 然后保存
             with open(step_file_path, 'a') as f:
                 f.write("Steps:\n")
@@ -435,7 +433,13 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         max_rewards = collections.defaultdict(list)
         log_data = dict()
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
-        
+        total_step = [x for x in total_step if x != 400.0]
+        total_step = [x for x in total_step if x != 700.0]
+        avg_step = np.mean(total_step)
+        with open(step_file_path, 'a') as f:
+                f.write("Total evg Steps:\n")
+                f.write(avg_step)  # Writing the steps as a comma-separated list
+                f.write("\n")
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
         # fortunately this won't invalidate our conclusion since

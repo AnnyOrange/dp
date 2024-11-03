@@ -55,8 +55,8 @@ def main(checkpoint, output_dir, device, speed,closeloop,te):
         cfg.task.env_runner['n_action_steps'] = int(cfg.task.env_runner['n_action_steps']//speed)
         policy.n_action_steps = int(policy.n_action_steps//speed)
         if speed==3:
-            cfg.task.env_runner['n_action_steps'] = 3
-            policy.n_action_steps = 3
+            cfg.task.env_runner['n_action_steps'] = 6
+            policy.n_action_steps = 6
     if te is True and closeloop is False:
         raise ValueError("Error: `te` is True and `closeloop` is False, which is not allowed.")
     # run eval

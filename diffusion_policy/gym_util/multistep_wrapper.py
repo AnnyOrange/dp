@@ -97,12 +97,30 @@ class MultiStepWrapper(gym.Wrapper):
 
         obs = self._get_obs(self.n_obs_steps)
         return obs
-
+    def speed_entropy(self,action):
+        actions = []
+        # print(action)
+        entropy = action[:,-1]
+        i = 0
+        while i<len(entropy):
+            if entropy[i]>0.4:
+                actions.append(action[i,:])
+                i=i+4
+            else:
+                actions.append(action[i,:])
+                i = i+2
+        return actions
+                
+            
     def step(self, action):
         """
         actions: (n_action_steps,) + action_shape
         """
         # a_step = 0
+        openloop = True
+        if openloop is True:
+            # print("True")
+            action = self.speed_entropy(action)
         for act in action:
             # a_step+=1
             if len(self.done) > 0 and self.done[-1]:

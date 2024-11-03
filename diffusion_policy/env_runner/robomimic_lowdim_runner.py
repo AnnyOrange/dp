@@ -250,7 +250,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        
+        min_val,max_val = self.min_max_val()
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -282,15 +282,16 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             state_dim = 7
             batch_size = n_envs
             num_samples = 10
+            entropy_history = np.empty((n_envs, 0))
             # print(tasks_num)
             if self.temporal_agg:
                 all_time_actions = torch.zeros(
                     [self.n_action_steps, self.n_action_steps, n_envs, state_dim]
-                ).cuda()   
+                ).to(device)  
                 all_time_samples = torch.zeros(
                     [self.n_action_steps, self.n_action_steps, n_envs, num_samples, state_dim-1]
-                ).cuda()
-
+                ).to(device) 
+            last_entropy = None
             while not done:
                 # create obs dict
                 np_obs_dict = {
@@ -318,7 +319,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                         sample_dict = policy.get_samples(obs_dict, num_samples=num_samples)
 
                 # device_transfer
-                entropy_pred = True
+                if self.closeloop is False:
+                    entropy_pred = True
+                else:
+                    entropy_pred = False
                 if action_dict['entropy_pred'] is None:
                     action_dict.pop('entropy_pred')
                     entropy_pred = False
@@ -330,6 +334,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 action = np_action_dict['action_pred'][:,self.n_latency_steps:]
                 if entropy_pred:
                     entropy = np_action_dict['entropy_pred'][:,self.n_latency_steps:]
+                    # print(entropy.shape) #(28, 16, 1)
+                    # print(entropy[0,:,:])
+                    entropy_history = np.hstack((entropy_history, entropy.squeeze(axis=2)))
+                    # print(entropy_history.shape)
+                    # import pdb;pdb.set_trace()
                 if not np.all(np.isfinite(action)):
                     # print(action)
                     raise RuntimeError("Nan or Inf action")
@@ -349,9 +358,9 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
-                if  self.temporal_agg:
-                    all_actions = torch.from_numpy(env_action).float().cuda()
-                    all_samples = torch.from_numpy(sample).float().cuda()
+                if self.temporal_agg:
+                    all_actions = torch.from_numpy(env_action).float().to(device)
+                    all_samples = torch.from_numpy(sample).float().to(device)
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
                     # all_actions扩维度 最开始增加维度
                     all_actions = all_actions.permute(1,0,2) # (16,28,7)
@@ -372,7 +381,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     exp_weights = np.exp(-k * np.arange(len(actions_for_curr_step)))
                     exp_weights = exp_weights / exp_weights.sum()
                     exp_weights = (
-                            torch.from_numpy(exp_weights).cuda().unsqueeze(dim=1).unsqueeze(dim=-1)
+                            torch.from_numpy(exp_weights).to(device).unsqueeze(dim=1).unsqueeze(dim=-1)
                     )
                     raw_action = (actions_for_curr_step * exp_weights).sum(dim=0, keepdim=True).permute(1,0,2)
                     env_action = raw_action.detach().cpu().numpy()
@@ -387,8 +396,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     all_time_samples = all_time_samples_temp
                     del all_time_samples_temp
                     t+=1
-                
+                entropy = self.trans_entropy(entropy,min_val,max_val)
+                # print(entropy)
                 env_action = np.concatenate((env_action, entropy),axis=-1)
+                last_entropy = entropy
                 obs, reward, done, info = env.step(env_action)
                 steps += (reward == 0)
                 done = np.all(done)
@@ -397,11 +408,25 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # update pbar
                 pbar.update(env_action.shape[1])
             pbar.close()
+            npy_file_path = f"{self.outputdir}/entropy_history.npy"
+
+            # 保存 entropy_history 为 .npy 文件
+            np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
+            
+            # 将entropy_history 按照任务数分别进行min max 然后保存
             with open(step_file_path, 'a') as f:
                 f.write("Steps:\n")
                 f.write(", ".join([str(step) for step in steps]))  # Writing the steps as a comma-separated list
                 f.write("\n")
+                # f.write("Entropy Min and Max per Task:\n")
+    
+                # for task_idx, task_entropy in enumerate(entropy_history):
+                #     min_val = np.min(task_entropy)
+                #     max_val = np.max(task_entropy)
+                    
+                #     # 写入每个任务的 min 和 max
+                #     f.write(f"Task {task_idx + 1} - Min: {min_val:.4f}, Max: {max_val:.4f}\n")
 
             # collect data for this round
             all_video_paths[this_global_slice] = env.render()[this_local_slice]
@@ -441,7 +466,24 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
         return log_data
     
-
+    def trans_entropy(self,entropy_values,min_val,max_val):
+        epsilon = 1e-8
+        # print(min_val)
+        # print(max_val)
+        entropy_values = np.where(entropy_values > 0, entropy_values, 0.02)
+        log_transformed_values = np.log(entropy_values + epsilon)
+        normalized_values = (log_transformed_values - min_val) / (max_val - min_val)
+        return normalized_values
+    def min_max_val(self):
+        file_path = '/home/xzj/project/dp/lingxiao_dp/dp/data/square_eval/openloop_entropy_test/entropy_history.npy'
+        entropy_values = np.load(file_path)
+        entropy_values = entropy_values.flatten()
+        entropy_values = entropy_values[entropy_values > 0]
+        epsilon = 1e-8
+        log_transformed_values = np.log(entropy_values.flatten() + epsilon)
+        min_val = np.min(log_transformed_values)
+        max_val = np.max(log_transformed_values)
+        return min_val,max_val
     def label_entropy(self, policy: BaseLowdimPolicy,episodes, speed = 1):
         device = policy.device
         dtype = policy.dtype
@@ -484,7 +526,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             if temporal_agg:
                 all_time_samples = torch.zeros(
                     [n_sample_steps, n_sample_steps, n_envs, num_samples, state_dim-1]
-                ).cuda()
+                ).to(device)
             
             for t in tqdm.tqdm(range(T), desc=f"Labeling entropy {chunk_idx+1}/{n_chunks}"):
                 if t+1 >= self.n_obs_steps:
@@ -517,7 +559,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
                 if temporal_agg:
-                    all_samples = torch.from_numpy(sample).float().cuda()
+                    all_samples = torch.from_numpy(sample).float().to(device)
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7) 
                     all_time_samples[[-1],  :n_sample_steps] = all_samples[:,:,:,:6]  
                     samples_for_curr_step = all_time_samples[:, 0]

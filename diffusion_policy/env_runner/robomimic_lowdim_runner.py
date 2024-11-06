@@ -22,7 +22,7 @@ from diffusion_policy.env.robomimic.robomimic_lowdim_wrapper import RobomimicLow
 import robomimic.utils.file_utils as FileUtils
 import robomimic.utils.env_utils as EnvUtils
 import robomimic.utils.obs_utils as ObsUtils
-
+import pickle
 import os
 import matplotlib.pyplot as plt
 def create_env(env_meta, obs_keys):
@@ -357,7 +357,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
-                if self.temporal_agg:
+                # print(env_action.shape)
+                if False:
                     all_actions = torch.from_numpy(env_action).float().to(device)
                     all_samples = torch.from_numpy(sample).float().to(device)
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7)
@@ -395,9 +396,13 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     all_time_samples = all_time_samples_temp
                     del all_time_samples_temp
                     t+=1
-                entropy = self.trans_entropy(entropy,min_val,max_val)
+                # entropy = self.trans_entropy(entropy,min_val,max_val)
                 # print(entropy)
                 env_action = np.concatenate((env_action, entropy),axis=-1)
+                # print(env_action.shape)
+                # import pdb;pdb.set_trace()
+                # env_action = env_action[:,::2,:]
+                # print(env_action.shape)
                 obs, reward, done, info = env.step(env_action)
                 steps += (reward == 0)
                 done = np.all(done)
@@ -435,10 +440,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
         total_step = [x for x in total_step if x != 400.0]
         total_step = [x for x in total_step if x != 700.0]
+        print(len(total_step))
         avg_step = np.mean(total_step)
         with open(step_file_path, 'a') as f:
                 f.write("Total evg Steps:\n")
-                f.write(avg_step)  # Writing the steps as a comma-separated list
+                f.write(f"{avg_step:.4f}\n")  # Writing the steps as a comma-separated list
                 f.write("\n")
         # results reported in the paper are generated using the commented out line below
         # which will only report and average metrics from first n_envs initial condition and seeds
@@ -622,6 +628,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         return uaction
     def plot_action_vs_pos_agent(self, save_dir, env):
         # 遍历每个任务
+        file_path_ = os.path.join(save_dir, 'statelist.pkl')
+        statelist = env.statelist
+        with open(file_path_, 'wb') as f:
+            pickle.dump(statelist, f)
         for i in range(len(env.statelist)):
             task_data = env.statelist[i][0]  # 获取每个任务的数据
 

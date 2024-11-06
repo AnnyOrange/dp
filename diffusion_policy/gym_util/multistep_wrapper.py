@@ -99,15 +99,11 @@ class MultiStepWrapper(gym.Wrapper):
         return obs
     def speed_entropy(self,action):
         actions = []
-        # print(action)
-        # print(action[0,:])
-        # print(action.shape)
-        # print(action[:,-1].shape)
-        # import pdb;pdb.set_trace()
         entropy = action[:,-1]
+        # print("len_entropy",len(entropy))
         i = 0
         while i<len(entropy):
-            if entropy[i]>0.4:
+            if entropy[i]>0.001:
                 actions.append(action[i,:])
                 i=i+4
             else:
@@ -115,9 +111,8 @@ class MultiStepWrapper(gym.Wrapper):
                 i = i+2
                 
         actions = np.array(actions)
-        print(actions.shape)
+        # print(actions.shape)
         return actions
-                
             
     def step(self, action):
         """

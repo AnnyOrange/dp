@@ -246,11 +246,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         n_envs = len(self.env_fns)
         n_inits = len(self.env_init_fn_dills)
         n_chunks = math.ceil(n_inits / n_envs)
-        total_step = []
+        total_steps = 0
         # allocate data
         all_video_paths = [None] * n_inits
         all_rewards = [None] * n_inits
-        min_val,max_val = self.min_max_val()
+        # min_val,max_val = self.min_max_val()
         for chunk_idx in range(n_chunks):
             start = chunk_idx * n_envs
             end = min(n_inits, start + n_envs)
@@ -276,7 +276,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             env_name = self.env_meta['env_name']
             pbar = tqdm.tqdm(total=self.max_steps, desc=f"Eval {env_name}Lowdim {chunk_idx+1}/{n_chunks}", 
                 leave=False, mininterval=self.tqdm_interval_sec)
-            steps = np.zeros(n_envs)
+            # steps = np.zeros(n_envs)
+            task_steps = []
             done = False
             t = 0
             state_dim = 7
@@ -407,7 +408,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 obs, reward, done, info = env.step(env_action)
                 # print(info)
                 # import pdb;pdb.set_trace()
-                steps += (reward == 0)
+                # steps += (reward == 0)
                 done = np.all(done)
                 past_action = action
 
@@ -419,13 +420,17 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # 保存 entropy_history 为 .npy 文件
             np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
-            total_step.extend(steps)
+            
+            total_steps = total_steps+sum(len(task[0]) for task in env.statelist if len(task[0]) != 1400)
+
+            # 存储每个任务的步数，忽略步数为 1400 的任务
+            task_steps = [len(task[0]) for task in env.statelist]
+            # total_step.extend(steps)
             # 将entropy_history 按照任务数分别进行min max 然后保存
             with open(step_file_path, 'a') as f:
                 f.write("Steps:\n")
-                f.write(", ".join([str(step) for step in steps]))  # Writing the steps as a comma-separated list
+                f.write(", ".join([str(step) for step in task_steps]))  # Writing the steps as a comma-separated list
                 f.write("\n")
-                # f.write("Entropy Min and Max per Task:\n")
     
                 # for task_idx, task_entropy in enumerate(entropy_history):
                 #     min_val = np.min(task_entropy)
@@ -441,10 +446,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         max_rewards = collections.defaultdict(list)
         log_data = dict()
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
-        total_step = [x for x in total_step if x != 400.0]
-        total_step = [x for x in total_step if x != 700.0]
-        print(len(total_step))
-        avg_step = np.mean(total_step)
+        
+        avg_step = np.mean(total_steps)
         with open(step_file_path, 'a') as f:
                 f.write("Total evg Steps:\n")
                 f.write(f"{avg_step:.4f}\n")  # Writing the steps as a comma-separated list
@@ -631,10 +634,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         return uaction
     def plot_action_vs_pos_agent(self, save_dir, env):
         # 遍历每个任务
-        file_path_ = os.path.join(save_dir, 'statelist.pkl')
-        statelist = env.statelist
-        with open(file_path_, 'wb') as f:
-            pickle.dump(statelist, f)
+        # file_path_ = os.path.join(save_dir, 'statelist.pkl')
+        # statelist = env.statelist
+        # with open(file_path_, 'wb') as f:
+        #     pickle.dump(statelist, f)
         for i in range(len(env.statelist)):
             task_data = env.statelist[i][0]  # 获取每个任务的数据
 

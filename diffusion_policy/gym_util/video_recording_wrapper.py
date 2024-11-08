@@ -42,6 +42,7 @@ class VideoRecordingWrapper(gym.Wrapper):
         entropy = action[-1]
         action = action[:-1]
         result = super().step(action)
+        obs = result[0]
         # print(result)
         if self.pusht is True:
             state_data = [{

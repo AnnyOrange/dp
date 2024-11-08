@@ -110,11 +110,12 @@ class MultiStepWrapper(gym.Wrapper):
                 controller_mode.append(1)
             else:
                 actions.append(action[i,:])
-                i = i+2
+                i = i+4 #+2
                 controller_mode.append(0)
                 
         actions = np.array(actions)
         # print(actions.shape)
+        # 这里应该改成actions和controller一起输出这样就可以在4x部分加入controller了
         return actions
             
     def step(self, action):
@@ -147,7 +148,9 @@ class MultiStepWrapper(gym.Wrapper):
             self.done.append(done)
             self._add_info(info)
         # print(a_step)
-
+        eps = 0 # 这里就是阈值
+        act = action[-1,:] # 这里就应该是结合controller_mode来的 但是为了应用action我就直接取每组最后一个了
+        done = self.controller_closeloop(act,eps,diff=2,done = aggregate(self.done, 'max'))
         observation = self._get_obs(self.n_obs_steps)
         # print("self.reward_agg_method",self.reward_agg_method)
         reward = aggregate(self.reward, self.reward_agg_method)
@@ -194,9 +197,9 @@ class MultiStepWrapper(gym.Wrapper):
         for k, v in self.info.items():
             result[k] = list(v)
         return result
-    def controller_closeloop(self,act,eps,diff):
+    def controller_closeloop(self,act,eps,diff,done):
         idx = 0
-        while done is False and diff<eps:
+        while done is False:
             if len(self.done) > 0 and self.done[-1]:
                 break
             # print(self.reward)
@@ -216,7 +219,8 @@ class MultiStepWrapper(gym.Wrapper):
             self.done.append(done)
             self._add_info(info)
             idx+=1
-            diff = observation-act
+            # diff = observation-act
         else:
-            diff = 0    
-        return done,diff
+            diff = 0 
+        diff = 2  # 这里应该删除，但是现在diff 的rpy没有出来所以就直接给一个输出 
+        return done

@@ -402,8 +402,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # print(env_action.shape)
                 # import pdb;pdb.set_trace()
                 # env_action = env_action[:,::2,:]
-                # print(env_action.shape)
+                # print(env_action.shape) # (28, 16, 8)
+                # import pdb;pdb.set_trace()
                 obs, reward, done, info = env.step(env_action)
+                # print(info)
+                # import pdb;pdb.set_trace()
                 steps += (reward == 0)
                 done = np.all(done)
                 past_action = action
@@ -411,8 +414,8 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # update pbar
                 pbar.update(env_action.shape[1])
             pbar.close()
-            npy_file_path = f"{self.outputdir}/entropy_history.npy"
-
+            os.makedirs(os.path.join(self.outputdir, str(chunk_idx)), exist_ok=True)
+            npy_file_path = os.path.join(self.outputdir, str(chunk_idx), "entropy_history.npy")
             # 保存 entropy_history 为 .npy 文件
             np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
@@ -568,7 +571,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                     sample = self.undo_transform_action(sample)
                 sample = sample.reshape(num_samples,sample.shape[0]//num_samples,sample.shape[1],sample.shape[2])
                 # perform temporal ensemble    
-                if temporal_agg:
+                if False:
                     all_samples = torch.from_numpy(sample).float().to(device)
                     all_samples = all_samples.permute(2,1,0,3)  # (16,28,10,7) 
                     all_time_samples[[-1],  :n_sample_steps] = all_samples[:,:,:,:6]  

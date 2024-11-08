@@ -99,16 +99,19 @@ class MultiStepWrapper(gym.Wrapper):
         return obs
     def speed_entropy(self,action):
         actions = []
+        controller_mode = []
         entropy = action[:,-1]
         # print("len_entropy",len(entropy))
         i = 0
         while i<len(entropy):
-            if entropy[i]>0.001:
+            if entropy[i]>0.003:
                 actions.append(action[i,:])
                 i=i+4
+                controller_mode.append(1)
             else:
                 actions.append(action[i,:])
                 i = i+2
+                controller_mode.append(0)
                 
         actions = np.array(actions)
         # print(actions.shape)
@@ -191,3 +194,29 @@ class MultiStepWrapper(gym.Wrapper):
         for k, v in self.info.items():
             result[k] = list(v)
         return result
+    def controller_closeloop(self,act,eps,diff):
+        idx = 0
+        while done is False and diff<eps:
+            if len(self.done) > 0 and self.done[-1]:
+                break
+            # print(self.reward)
+            if len(self.reward) > 0 and (self.reward[-1]==1):
+                done = True
+                self.done.append(done)
+                break
+            if idx > 2:
+                break
+            observation, reward, done, info = super().step(act)
+            self.obs.append(observation)
+            self.reward.append(reward)
+            if (self.max_episode_steps is not None) \
+                and (len(self.reward) >= self.max_episode_steps):
+                # truncation
+                done = True
+            self.done.append(done)
+            self._add_info(info)
+            idx+=1
+            diff = observation-act
+        else:
+            diff = 0    
+        return done,diff

@@ -42,7 +42,7 @@ class VideoRecordingWrapper(gym.Wrapper):
         entropy = action[-1]
         action = action[:-1]
         result = super().step(action)
-        
+        # print(result)
         if self.pusht is True:
             state_data = [{
                 "action": action,
@@ -59,7 +59,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             agent = np.concatenate([robot0_eef_pos,robot0_eef_quat,robot0_gripper_qpos])
             # print(agent)
             if self.abs_action:
-                rotation_transformer = RotationTransformer('axis_angle','quaternion')
+                rotation_transformer = RotationTransformer('quaternion','axis_angle')
                 agent = self.undo_transform_agent(agent,rotation_transformer)
                 # print(agent)
                 # print(agent.shape)
@@ -82,7 +82,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             frame = self.env.render(
                 mode=self.mode, **self.render_kwargs)
             assert frame.dtype == np.uint8
-            if entropy>0.001:
+            if entropy>0.003:
                 frame = put_text(frame,  f"4x{entropy:.1e}")
             else:
                 frame = put_text(frame,  f"2x{entropy:.1e}")
@@ -105,7 +105,8 @@ class VideoRecordingWrapper(gym.Wrapper):
         rot = agent[...,3:3+d_rot]
         gripper = agent[...,[-1]]
         # print(gripper)
-        rot = rotation_transformer.inverse(rot)
+        rot = rotation_transformer.forward(rot)
+        # rot = rotation_transformer.inverse(rot)
         uagent = np.concatenate([
             pos, rot, gripper
         ], axis=-1)

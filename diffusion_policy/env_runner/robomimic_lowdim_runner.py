@@ -94,6 +94,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         fps = 20
         if n_envs is None:
             n_envs = n_train + n_test
+            print(n_train)
+            print(n_test)
+        # print("n_envs",n_envs)
+        n_envs = n_train + n_test
         # import pdb
         # handle latency step
         # to mimic latency, we request n_latency_steps additional steps 
@@ -154,6 +158,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         env_init_fn_dills = list()
 
         # train
+        # print(n_train)
         with h5py.File(dataset_path, 'r') as f:
             for i in range(n_train):
                 train_idx = train_start_idx + i
@@ -181,8 +186,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 env_seeds.append(train_idx)
                 env_prefixs.append('train/')
                 env_init_fn_dills.append(dill.dumps(init_fn))
-        
+                # print(len(env_init_fn_dills))
+        print()
         # test
+        # print(n_test)
         for i in range(n_test):
             seed = test_start_seed + i
             enable_render = i < n_test_vis
@@ -209,6 +216,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             env_seeds.append(seed)
             env_prefixs.append('test/')
             env_init_fn_dills.append(dill.dumps(init_fn))
+        # print(len(env_init_fn_dills))
         # pdb.set_trace()
         env = AsyncVectorEnv(env_fns)
         # env = SyncVectorEnv(env_fns)
@@ -415,13 +423,13 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # update pbar
                 pbar.update(env_action.shape[1])
             pbar.close()
-            os.makedirs(os.path.join(self.outputdir, str(chunk_idx)), exist_ok=True)
-            npy_file_path = os.path.join(self.outputdir, str(chunk_idx), "entropy_history.npy")
+            # os.makedirs(os.path.join(self.outputdir, str(chunk_idx)), exist_ok=True)
+            # npy_file_path = os.path.join(self.outputdir, str(chunk_idx), "entropy_history.npy")
             # 保存 entropy_history 为 .npy 文件
-            np.save(npy_file_path, entropy_history)
+            # np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
             
-            total_steps = total_steps+sum(len(task[0]) for task in env.statelist if len(task[0]) != 1400)
+            total_steps = total_steps+sum(len(task[0]) for task in env.statelist if len(task[0]) != 700)
 
             # 存储每个任务的步数，忽略步数为 1400 的任务
             task_steps = [len(task[0]) for task in env.statelist]
@@ -447,7 +455,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         log_data = dict()
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
         
-        avg_step = np.mean(total_steps)
+        avg_step = total_steps/n_envs
         with open(step_file_path, 'a') as f:
                 f.write("Total evg Steps:\n")
                 f.write(f"{avg_step:.4f}\n")  # Writing the steps as a comma-separated list

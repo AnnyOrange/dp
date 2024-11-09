@@ -102,15 +102,19 @@ class MultiStepWrapper(gym.Wrapper):
         controller_mode = []
         entropy = action[:,-1]
         # print("len_entropy",len(entropy))
-        i = 0
-        while i<len(entropy):
-            if entropy[i]>0.003:
-                actions.append(action[i,:])
-                i=i+4
+        i = -1
+        # actions.append(action[3,:])
+        # actions.append(action[7,:])
+        speed = 5
+        while (i+1)<len(entropy):
+            if entropy[i+1]>0.002 and (i+speed)<len(entropy):
+                # print("a")
+                actions.append(action[i+speed,:])
+                i=i+speed
                 controller_mode.append(1)
             else:
-                actions.append(action[i,:])
-                i = i+4 #+2
+                actions.append(action[i+1,:])
+                i = i+1 #+2
                 controller_mode.append(0)
                 
         actions = np.array(actions)
@@ -148,9 +152,9 @@ class MultiStepWrapper(gym.Wrapper):
             self.done.append(done)
             self._add_info(info)
         # print(a_step)
-        eps = 0 # 这里就是阈值
-        act = action[-1,:] # 这里就应该是结合controller_mode来的 但是为了应用action我就直接取每组最后一个了
-        done = self.controller_closeloop(act,eps,diff=2,done = aggregate(self.done, 'max'))
+        # eps = 0 # 这里就是阈值
+        # act = action[-1,:] # 这里就应该是结合controller_mode来的 但是为了应用action我就直接取每组最后一个了
+        # done = self.controller_closeloop(act,eps,diff=2,done = aggregate(self.done, 'max'))
         observation = self._get_obs(self.n_obs_steps)
         # print("self.reward_agg_method",self.reward_agg_method)
         reward = aggregate(self.reward, self.reward_agg_method)

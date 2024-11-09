@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 from diffusion_policy.real_world.video_recorder import VideoRecorder
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
+from diffusion_policy.model.common.normalizer import LinearNormalizer
 class VideoRecordingWrapper(gym.Wrapper):
     def __init__(self, 
             env, 
@@ -30,6 +31,7 @@ class VideoRecordingWrapper(gym.Wrapper):
         self.robomimic = robomimic
         self.step_count = 0
         self.abs_action = abs_action
+        self.normalizer = LinearNormalizer()
 
     def reset(self, **kwargs):
         obs = super().reset(**kwargs)
@@ -52,6 +54,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             self.statelist.append(state_data)
         if self.robomimic is True: 
             # print(result[-1]['robot0_eef_pos'])
+            objects = result[-1]['object']
             robot0_eef_pos = result[-1]['robot0_eef_pos']
             robot0_eef_quat = result[-1]['robot0_eef_quat']
             # print("robot0_eef_quat",len(robot0_eef_quat))
@@ -83,10 +86,10 @@ class VideoRecordingWrapper(gym.Wrapper):
             frame = self.env.render(
                 mode=self.mode, **self.render_kwargs)
             assert frame.dtype == np.uint8
-            if entropy>0.003:
-                frame = put_text(frame,  f"4x{entropy:.1e}")
+            if entropy>0.002:
+                frame = put_text(frame,  f"5x{entropy:.1e}")
             else:
-                frame = put_text(frame,  f"2x{entropy:.1e}")
+                frame = put_text(frame,  f"1x{entropy:.1e}")
             self.video_recoder.write_frame(frame)
         return result
     

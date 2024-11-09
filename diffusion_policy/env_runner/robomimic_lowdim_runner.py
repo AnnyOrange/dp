@@ -413,6 +413,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
                 # env_action = env_action[:,::2,:]
                 # print(env_action.shape) # (28, 16, 8)
                 # import pdb;pdb.set_trace()
+                env_action = env_action[:,:8,:]
                 obs, reward, done, info = env.step(env_action)
                 # print(info)
                 # import pdb;pdb.set_trace()
@@ -429,10 +430,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
             
-            total_steps = total_steps+sum(len(task[0]) for task in env.statelist if len(task[0]) != 700)
+            total_steps = sum(len(task[0]) for task in env.statelist if len(task[0]) != 700)
 
             # 存储每个任务的步数，忽略步数为 1400 的任务
-            task_steps = [len(task[0]) for task in env.statelist]
+            task_steps = [len(task[0]) for task in env.statelist if len(task[0]) != 700]
             # total_step.extend(steps)
             # 将entropy_history 按照任务数分别进行min max 然后保存
             with open(step_file_path, 'a') as f:
@@ -455,7 +456,7 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
         log_data = dict()
         self.plot_action_vs_pos_agent(save_dir = self.outputdir , env = env)
         
-        avg_step = total_steps/n_envs
+        avg_step = total_steps/len(task_steps)
         with open(step_file_path, 'a') as f:
                 f.write("Total evg Steps:\n")
                 f.write(f"{avg_step:.4f}\n")  # Writing the steps as a comma-separated list
@@ -671,9 +672,11 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
 
             # 创建子图
             fig, axes = plt.subplots(nrows=n_groups, ncols=1, figsize=(8, 2 * n_groups), sharex=True)
-            save_path = os.path.join(save_dir, 'plot', f'rollout{i+1}_action_vs_pos_agent.png')
-            os.makedirs(os.path.dirname(save_path), exist_ok=True)
-
+            # save_path = os.path.join(save_dir, 'plot', f'rollout{i+1}_action_vs_pos_agent.png')
+            # os.makedirs(os.path.dirname(save_path), exist_ok=True)
+            save_path_svg = os.path.join(save_dir, 'plot', f'rollout{i+1}_action_vs_pos_agent.svg')
+            # fig.savefig(save_path_svg, format='svg')  # 保存为 SVG
+            os.makedirs(os.path.dirname(save_path_svg), exist_ok=True)
             # 绘制每个维度的对比
             for j in range(7):
                 axes[j].plot(tstep, np.array(actions[j])[1:], label=f'action_dim_{j}')
@@ -685,6 +688,6 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             plt.tight_layout()
 
             # 保存图表
-            fig.savefig(save_path)
+            fig.savefig(save_path_svg, format='svg')
             plt.close(fig)
 

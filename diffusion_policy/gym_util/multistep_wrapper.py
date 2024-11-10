@@ -149,7 +149,7 @@ class MultiStepWrapper(gym.Wrapper):
         actions: (n_action_steps,) + action_shape
         """
         # a_step = 0
-        eps = 1
+        eps = 0.02
         openloop = True
         if openloop is True:
             # print("True")
@@ -177,8 +177,8 @@ class MultiStepWrapper(gym.Wrapper):
                 done = True
             self.done.append(done)
             self._add_info(info)
-            if controller==0:
-                print("ori",np.mean(np.abs(observation[14:17]-act[0:3])))
+            # if controller==0:
+            #     print("ori",np.mean(np.abs(observation[14:17]-act[0:3])))
             if controller==1:
                 diff = np.mean(np.abs(observation[14:17]-act[0:3]))
                 # print("speed",diff)

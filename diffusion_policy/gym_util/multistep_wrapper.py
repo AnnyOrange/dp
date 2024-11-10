@@ -102,12 +102,34 @@ class MultiStepWrapper(gym.Wrapper):
         controller_mode = []
         entropy = action[:,-1]
         # print("len_entropy",len(entropy))
-        i = -1
+        # actions.append(action[1,:])
+        # actions.append(action[3,:])
+        # actions.append(action[5,:])
+        # actions.append(action[7,:])
         # actions.append(action[3,:])
         # actions.append(action[7,:])
-        speed = 5
+        # actions.append(action[2,:])
+        # actions.append(action[5,:])
+        # actions.append(action[7,:])
+        
+        # # 用点判断
+        # i = -1
+        # speed = 5
+        # while (i+1)<len(entropy):
+        #     if (i+speed)<len(entropy) and entropy[i+1]>0.04:
+        #         actions.append(action[i+speed,:])
+        #         i=i+speed
+        #         controller_mode.append(1)
+        #     else:
+        #         actions.append(action[i+1,:])
+        #         i = i+1 #+2
+        #         controller_mode.append(0)
+        # 用段判断
+        i = -1
+        speed = 4
         while (i+1)<len(entropy):
-            if entropy[i+1]>0.002 and (i+speed)<len(entropy):
+            if (i+speed)<len(entropy) and np.mean(entropy[i+1:i+speed])>0.04:
+            # if (i+speed)<len(entropy) and entropy[i+1]>0.002:
                 # print("a")
                 actions.append(action[i+speed,:])
                 i=i+speed
@@ -120,18 +142,23 @@ class MultiStepWrapper(gym.Wrapper):
         actions = np.array(actions)
         # print(actions.shape)
         # 这里应该改成actions和controller一起输出这样就可以在4x部分加入controller了
-        return actions
+        return actions,controller_mode
             
     def step(self, action):
         """
         actions: (n_action_steps,) + action_shape
         """
         # a_step = 0
+        eps = 1
         openloop = True
         if openloop is True:
             # print("True")
-            action = self.speed_entropy(action)
+            action,controller_mode = self.speed_entropy(action)
+            # print("action",action.shape)
+            # print("controller",controller_mode.shape)
+        idx = 0
         for act in action:
+            controller = controller_mode[idx]
             # a_step+=1
             if len(self.done) > 0 and self.done[-1]:
                 # termination
@@ -142,7 +169,6 @@ class MultiStepWrapper(gym.Wrapper):
                 self.done.append(done)
                 break
             observation, reward, done, info = super().step(act)
-            # print(reward)
             self.obs.append(observation)
             self.reward.append(reward)
             if (self.max_episode_steps is not None) \
@@ -151,6 +177,14 @@ class MultiStepWrapper(gym.Wrapper):
                 done = True
             self.done.append(done)
             self._add_info(info)
+            if controller==0:
+                print("ori",np.mean(np.abs(observation[14:17]-act[0:3])))
+            if controller==1:
+                diff = np.mean(np.abs(observation[14:17]-act[0:3]))
+                # print("speed",diff)
+                done = self.controller_closeloop(act,eps,diff,done)
+            idx+=1
+            
         # print(a_step)
         # eps = 0 # 这里就是阈值
         # act = action[-1,:] # 这里就应该是结合controller_mode来的 但是为了应用action我就直接取每组最后一个了
@@ -203,7 +237,7 @@ class MultiStepWrapper(gym.Wrapper):
         return result
     def controller_closeloop(self,act,eps,diff,done):
         idx = 0
-        while done is False:
+        while done is False and diff > eps:
             if len(self.done) > 0 and self.done[-1]:
                 break
             # print(self.reward)
@@ -211,7 +245,7 @@ class MultiStepWrapper(gym.Wrapper):
                 done = True
                 self.done.append(done)
                 break
-            if idx > 2:
+            if idx > 1:
                 break
             observation, reward, done, info = super().step(act)
             self.obs.append(observation)
@@ -223,8 +257,8 @@ class MultiStepWrapper(gym.Wrapper):
             self.done.append(done)
             self._add_info(info)
             idx+=1
+            diff = np.mean(np.abs(observation[14:17]-act[0:3]))
             # diff = observation-act
         else:
-            diff = 0 
-        diff = 2  # 这里应该删除，但是现在diff 的rpy没有出来所以就直接给一个输出 
+            diff = 0   # 这里应该删除，但是现在diff 的rpy没有出来所以就直接给一个输出 
         return done

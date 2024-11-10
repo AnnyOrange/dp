@@ -430,10 +430,10 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             # np.save(npy_file_path, entropy_history)
             step_file_path = os.path.join(self.outputdir, 'step.txt')
             
-            total_steps = sum(len(task[0]) for task in env.statelist if len(task[0]) != 700)
+            total_steps = sum(len(task[0]) for task in env.statelist if len(task[0]) != 400)
 
             # 存储每个任务的步数，忽略步数为 1400 的任务
-            task_steps = [len(task[0]) for task in env.statelist if len(task[0]) != 700]
+            task_steps = [len(task[0]) for task in env.statelist if len(task[0]) != 400]
             # total_step.extend(steps)
             # 将entropy_history 按照任务数分别进行min max 然后保存
             with open(step_file_path, 'a') as f:

@@ -436,6 +436,15 @@ class RobomimicLowdimRunner(BaseLowdimRunner):
             task_steps = [len(task[0]) for task in env.statelist if len(task[0]) != 700]
             # total_step.extend(steps)
             # 将entropy_history 按照任务数分别进行min max 然后保存
+            min_entropy = np.min(entropy_history)
+            max_entropy = np.max(entropy_history)
+            mean_entropy = np.mean(entropy_history)
+            var_entropy = np.var(entropy_history)
+            print('max e',max_entropy,'min e',min_entropy,'mean e',mean_entropy,'var e',var_entropy)
+            entropy_history = (entropy_history - mean_entropy)/var_entropy
+            min_norm_e = np.min(entropy_history)
+            max_norm_e = np.max(entropy_history)
+            print('max norm',max_norm_e,'min norm',min_norm_e)
             with open(step_file_path, 'a') as f:
                 f.write("Steps:\n")
                 f.write(", ".join([str(step) for step in task_steps]))  # Writing the steps as a comma-separated list

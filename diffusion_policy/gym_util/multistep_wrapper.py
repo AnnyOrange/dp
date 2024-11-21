@@ -3,6 +3,7 @@ from gym import spaces
 import numpy as np
 from collections import defaultdict, deque
 import dill
+from .awe_entropy import dp_waypoint_selection, dp_entropy_waypoint_selection
 
 def stack_repeated(x, n):
     return np.repeat(np.expand_dims(x,axis=0),n,axis=0)
@@ -97,41 +98,68 @@ class MultiStepWrapper(gym.Wrapper):
 
         obs = self._get_obs(self.n_obs_steps)
         return obs
-    def speed_entropy(self,action):
+
+    def speed_entropy(self,action, entropy, threshold):
         actions = []
         controller_mode = []
-        entropy = action[:,-1]
         # print("len_entropy",len(entropy))
         i = -1
         # actions.append(action[3,:])
         # actions.append(action[7,:])
-        speed = 5
+        speeds = []
+        max_speed = 3
         while (i+1)<len(entropy):
-            if entropy[i+1]>0.002 and (i+speed)<len(entropy):
-                # print("a")
-                actions.append(action[i+speed,:])
-                i=i+speed
+            if entropy[i+1]>threshold:
+                for k in range(1, max_speed+1):
+                    if entropy[min(k+i,len(entropy)-1)] <= threshold:
+                        k = k-1
+                        break
+                high_speed = min(k, max_speed)
+                index = min(i+high_speed, len(entropy)-1)
+                actions.append(action[index,:])
+                speed = high_speed
+                i = i + speed
+                speeds.append(speed)
                 controller_mode.append(1)
             else:
                 actions.append(action[i+1,:])
-                i = i+1 #+2
+                speed = 3
+                i = i+speed 
+                speeds.append(speed)
                 controller_mode.append(0)
-                
+        speeds = np.array(speeds)        
         actions = np.array(actions)
+        actions = np.concatenate((actions, speeds[:,None]),axis=-1)
         # print(actions.shape)
         # 这里应该改成actions和controller一起输出这样就可以在4x部分加入controller了
         return actions
-            
+
+    def speed_awe_entropy(self,actions, entropy, threshold):
+        controller_mode = []
+        i = -1
+        
+        # waypoints = dp_waypoint_selection(actions=actions, err_threshold=0.005, pos_only=False)
+        waypoints = dp_entropy_waypoint_selection(actions=actions, err_threshold=0.005, pos_only=False)
+        actions = actions[waypoints]
+        waypoints.insert(0,0)
+        speeds = np.diff(np.array(waypoints))
+        actions = np.concatenate((actions, speeds[:,None]),axis=-1)
+        # print(actions.shape)
+        # 这里应该改成actions和controller一起输出这样就可以在4x部分加入controller了
+        return actions
+
     def step(self, action):
         """
         actions: (n_action_steps,) + action_shape
         """
         # a_step = 0
         openloop = True
+        entropy = action[:,-1]
+        threshold = 0.002
         if openloop is True:
             # print("True")
-            action = self.speed_entropy(action)
-        for act in action:
+            action = self.speed_awe_entropy(action, entropy, threshold)
+        for k, act in zip(range(len(action)),action):
             # a_step+=1
             if len(self.done) > 0 and self.done[-1]:
                 # termination
@@ -142,6 +170,11 @@ class MultiStepWrapper(gym.Wrapper):
                 self.done.append(done)
                 break
             observation, reward, done, info = super().step(act)
+            if k<len(action)-1:
+                if action[k, -2] > threshold and action[k+1, -2]<threshold:
+                    eps = 0.02
+                    diff = np.mean(np.abs(observation[14:17]-act[0:3]))
+                    # done = self.controller_closeloop(act,eps,diff,done)
             # print(reward)
             self.obs.append(observation)
             self.reward.append(reward)
@@ -151,10 +184,12 @@ class MultiStepWrapper(gym.Wrapper):
                 done = True
             self.done.append(done)
             self._add_info(info)
-        # print(a_step)
-        # eps = 0 # 这里就是阈值
-        # act = action[-1,:] # 这里就应该是结合controller_mode来的 但是为了应用action我就直接取每组最后一个了
-        # done = self.controller_closeloop(act,eps,diff=2,done = aggregate(self.done, 'max'))
+
+        if not self.done[-1] and entropy[-1]>threshold:
+            eps = 0.02
+            diff = np.mean(np.abs(observation[14:17]-act[0:3]))
+            # done = self.controller_closeloop(act,eps,diff,done)
+
         observation = self._get_obs(self.n_obs_steps)
         # print("self.reward_agg_method",self.reward_agg_method)
         reward = aggregate(self.reward, self.reward_agg_method)
@@ -203,16 +238,16 @@ class MultiStepWrapper(gym.Wrapper):
         return result
     def controller_closeloop(self,act,eps,diff,done):
         idx = 0
-        while done is False:
+        while done is False and diff > eps:
             if len(self.done) > 0 and self.done[-1]:
                 break
-            # print(self.reward)
             if len(self.reward) > 0 and (self.reward[-1]==1):
                 done = True
                 self.done.append(done)
                 break
-            if idx > 2:
+            if idx > 1:
                 break
+            act[-1] = 0
             observation, reward, done, info = super().step(act)
             self.obs.append(observation)
             self.reward.append(reward)
@@ -223,8 +258,7 @@ class MultiStepWrapper(gym.Wrapper):
             self.done.append(done)
             self._add_info(info)
             idx+=1
+            diff = np.mean(np.abs(observation[14:17]-act[0:3]))
             # diff = observation-act
-        else:
-            diff = 0 
-        diff = 2  # 这里应该删除，但是现在diff 的rpy没有出来所以就直接给一个输出 
+        
         return done

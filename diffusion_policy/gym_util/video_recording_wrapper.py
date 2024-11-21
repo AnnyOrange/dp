@@ -41,8 +41,9 @@ class VideoRecordingWrapper(gym.Wrapper):
         return obs
     
     def step(self, action):
-        entropy = action[-1]
-        action = action[:-1]
+        speed = action[-1]
+        entropy = action[-2]
+        action = action[:-2]
         result = super().step(action)
         obs = result[0]
         # print(result)
@@ -86,10 +87,7 @@ class VideoRecordingWrapper(gym.Wrapper):
             frame = self.env.render(
                 mode=self.mode, **self.render_kwargs)
             assert frame.dtype == np.uint8
-            if entropy>0.002:
-                frame = put_text(frame,  f"5x{entropy:.1e}")
-            else:
-                frame = put_text(frame,  f"1x{entropy:.1e}")
+            frame = put_text(frame,  f"{speed}x{entropy:.1e}")
             self.video_recoder.write_frame(frame)
         return result
     

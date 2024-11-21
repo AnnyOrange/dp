@@ -236,7 +236,7 @@ def get_all_pos_only_geometric_distance_gpu(gt_states):
     # Calculate projections
     projection = gt_states_j + t.unsqueeze(-1) * line_vector
     
-    # Calculate distances
+    # Calculate distances 
     distances = torch.norm(gt_states_i - projection, dim=-1)
     return distances.cpu().numpy()
 
